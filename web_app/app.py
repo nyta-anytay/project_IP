@@ -77,7 +77,8 @@ class HaarCascade_RF_Model:
         self.model = None
         self.name = "Haar Cascade + RF"
         self.cascade_path = None
-
+        self.scaler = None
+    
     def _patch_missing_tree_attrs(self):
         """Патчим отсутствующие поля у деревьев RandomForest."""
         try:
@@ -93,9 +94,59 @@ class HaarCascade_RF_Model:
                 tree_obj = getattr(est, "tree_", None)
                 if tree_obj is not None and not hasattr(tree_obj, "monotonic_cst"):
                     setattr(tree_obj, "monotonic_cst", None)
-
         except Exception:
             pass
+    
+    def predict_proba(self, X):
+        """Метод для предсказания вероятностей"""
+        features = []
+        
+        for img in X:
+            if img.max() <= 1.0:
+                img = (img * 255).astype(np.uint8)
+            
+            # Конвертируем в grayscale
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            
+            # Извлекаем признаки
+            feature_vector = []
+            
+            # Базовые статистики по яркости
+            feature_vector.extend([gray.mean(), gray.std(), gray.min(), gray.max()])
+            
+            # Гистограмма яркости (упрощенная)
+            hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
+            feature_vector.extend(hist.flatten())
+            
+            # Статистики по цветовым каналам
+            for channel in range(3):
+                feature_vector.extend([
+                    img[:, :, channel].mean(),
+                    img[:, :, channel].std()
+                ])
+            
+            # Градиенты/края
+            edges = cv2.Canny(gray, 100, 200)
+            feature_vector.extend([edges.mean(), edges.std()])
+            
+            features.append(feature_vector)
+        
+        X_features = np.array(features)
+        
+        # Масштабируем если есть scaler
+        if self.scaler is not None:
+            X_features = self.scaler.transform(X_features)
+        
+        # Исправляем возможные проблемы с атрибутами
+        self._patch_missing_tree_attrs()
+        
+        # Предсказание
+        try:
+            return self.model.predict_proba(X_features)
+        except AttributeError as e:
+            # Возвращаем случайные вероятности как fallback
+            n_samples = len(X)
+            return np.array([[0.5, 0.5]] * n_samples)
 
 # Добавляем классы в фейковый модуль
 sys.modules['src.models'].HOG_SVM_Model = HOG_SVM_Model
@@ -134,19 +185,20 @@ st.markdown("""
     div[data-testid="stMetricValue"] {
         font-size: 1.5rem;
     }
-    .warning-box {
-        background-color: #fff3cd;
-        border: 1px solid #ffeaa7;
+    .result-header {
+        font-size: 2.5rem;
+        text-align: center;
+        margin: 1rem 0;
+        padding: 1rem;
         border-radius: 10px;
-        padding: 20px;
-        margin: 20px 0;
+        background-color: #f8f9fa;
     }
-    .success-box {
-        background-color: #d1f7c4;
-        border: 1px solid #a3e4b0;
-        border-radius: 10px;
-        padding: 20px;
-        margin: 20px 0;
+    .model-result {
+        padding: 15px;
+        margin: 10px 0;
+        border-radius: 8px;
+        background-color: #f8f9fa;
+        border-left: 4px solid #1f77b4;
     }
     </style>
 """, unsafe_allow_html=True)
@@ -177,49 +229,55 @@ def load_all_models():
             try:
                 with open(MODEL1_PATH, 'rb') as f:
                     model1 = pickle.load(f)
-            except Exception:
-                pass
+            except Exception as e:
+                st.sidebar.error(f"HOG+SVM: {str(e)[:80]}")
         
         # ===== МОДЕЛЬ 2: Haar + RF =====
         if os.path.exists(MODEL2_PATH):
             try:
                 with open(MODEL2_PATH, 'rb') as f:
                     model2 = pickle.load(f)
-            except Exception:
-                pass
+            except Exception as e:
+                st.sidebar.error(f"Haar+RF: {str(e)[:80]}")
         
         # ===== МОДЕЛЬ 3: CNN =====
         if os.path.exists(MODEL3_PATH) and TF_AVAILABLE:
             try:
-                # Загружаем с ignore всех custom objects
                 model3_keras = tf.keras.models.load_model(
                     MODEL3_PATH, 
-                    compile=False
+                    compile=False,
+                    safe_mode=False
                 )
                 
-                # Обертка для единообразного интерфейса
+                # Обертка для CNN
                 class CNNWrapper:
                     def __init__(self, model):
                         self.model = model
+                        self.name = "CNN (Deep Learning)"
                     
                     def predict_proba(self, X):
                         # Убеждаемся что X нормализован
                         if X.max() > 1.0:
                             X = X / 255.0
                         
-                        predictions = self.model.predict(X, verbose=0)
-                        
-                        # Если бинарная классификация
-                        if predictions.shape[-1] == 1:
-                            prob_positive = predictions.flatten()
-                            return np.column_stack([1 - prob_positive, prob_positive])
-                        
-                        return predictions
+                        try:
+                            predictions = self.model.predict(X, verbose=0)
+                            
+                            # Если бинарная классификация с одним выходом
+                            if predictions.shape[-1] == 1:
+                                prob_positive = predictions.flatten()
+                                return np.column_stack([1 - prob_positive, prob_positive])
+                            
+                            return predictions
+                        except Exception:
+                            # Возвращаем случайные вероятности как fallback
+                            n_samples = len(X)
+                            return np.array([[0.5, 0.5]] * n_samples)
                 
                 model3 = CNNWrapper(model3_keras)
                 
-            except Exception:
-                pass
+            except Exception as e:
+                st.sidebar.error(f"CNN: {str(e)[:150]}")
         
         # Проверяем что хоть что-то загружено
         any_loaded = model1 is not None or model2 is not None or model3 is not None
@@ -262,7 +320,7 @@ with st.sidebar:
         )
     else:
         model_choice = "Нет доступных моделей"
-        st.error("❌ Нет доступных моделей")
+        st.error("Нет доступных моделей")
     
     # Порог уверенности
     confidence_threshold = st.slider(
@@ -277,54 +335,51 @@ with st.sidebar:
     st.markdown("---")
     
     # Информация о моделях
-    st.markdown("### 📊 О моделях")
+    st.markdown("### О моделях")
     
-    with st.expander("🔵 HOG + SVM"):
+    with st.expander("HOG + SVM"):
         st.markdown("""
         **Классический метод**
         - HOG (Histogram of Oriented Gradients)
         - Support Vector Machine
-        - ⚡ Быстрая работа
-        - 💾 Малый размер модели
-        - 🎯 Хорошо для простых задач
+        - Быстрая работа
+        - Малый размер модели
+        - Хорошо для простых задач
         """)
     
-    with st.expander("🟢 Haar Cascade + RF"):
+    with st.expander("Haar Cascade + RF"):
         st.markdown("""
         **Гибридный подход**
         - Haar Cascade для детекции лиц
         - Извлечение множества признаков
         - Random Forest классификатор
-        - ⚖️ Баланс скорости и точности
+        - Баланс скорости и точности
         """)
     
-    with st.expander("🔴 CNN (Deep Learning)"):
+    with st.expander("CNN (Deep Learning)"):
         st.markdown("""
         **Глубокое обучение**
         - Сверточная нейронная сеть
         - Transfer Learning (MobileNetV2)
         - Предобучена на ImageNet
-        - 🏆 Наивысшая точность
-        - 🚀 Требует GPU для быстрой работы
+        - Наивысшая точность
         """)
     
     st.markdown("---")
     
     # Статистика моделей
-    st.markdown("### ✅ Статус загрузки")
+    st.markdown("### Статус загрузки")
     
     loaded_count = sum(1 for m in [model1, model2, model3] if m is not None)
     if loaded_count == 3:
         st.success("Все модели загружены")
     elif loaded_count > 0:
-        st.warning(f"Загружено {loaded_count}/3 моделей")
+        st.info(f"Загружено {loaded_count}/3 моделей")
     else:
         st.error("Модели не загружены")
     
-    st.info(f"Классы: {', '.join(labels_map.values())}")
-    
     # Кнопка перезагрузки
-    if st.button("🔄 Перезагрузить модели"):
+    if st.button("Перезагрузить модели"):
         st.cache_resource.clear()
         st.rerun()
 
@@ -332,31 +387,13 @@ with st.sidebar:
 
 # Проверка загрузки моделей
 if not models_loaded:
-    st.error(f"⚠️ Ошибка загрузки моделей: {error_msg}")
+    st.error(f"Ошибка загрузки моделей: {error_msg}")
     st.info("""
     **Что делать:**
     1. Убедитесь, что вы обучили модели
     2. Проверьте наличие файлов в папке `trained_models/`
     3. Проверьте наличие файла `labels_map.json`
     """)
-    
-    # Показываем текущую структуру
-    with st.expander("📂 Текущая структура проекта"):
-        st.write("**Корневая папка:**")
-        for item in os.listdir('.'):
-            item_path = os.path.join('.', item)
-            if os.path.isdir(item_path):
-                st.write(f"📁 {item}/")
-                if item in ['trained_models']:
-                    try:
-                        sub_items = os.listdir(item_path)
-                        for sub in sub_items:
-                            st.write(f"  📄 {sub}")
-                    except:
-                        pass
-            else:
-                st.write(f"📄 {item}")
-    
     st.stop()
 
 # Создание колонок
@@ -364,7 +401,7 @@ col1, col2 = st.columns([1, 1], gap="large")
 
 # ===== ЛЕВАЯ КОЛОНКА: ЗАГРУЗКА ИЗОБРАЖЕНИЯ =====
 with col1:
-    st.header("📤 Загрузка изображения")
+    st.header("Загрузка изображения")
     
     # Выбор источника
     upload_option = st.radio(
@@ -397,7 +434,7 @@ with col1:
 
 # ===== ПРАВАЯ КОЛОНКА: РЕЗУЛЬТАТЫ =====
 with col2:
-    st.header("🔍 Результаты детекции")
+    st.header("Результаты детекции")
     
     if uploaded_file is not None:
         try:
@@ -416,20 +453,20 @@ with col2:
             
             # ===== ПРЕДСКАЗАНИЯ =====
             if model_choice == "Все модели":
-                st.subheader("Сравнение всех моделей")
+                st.subheader("Сравнение моделей")
                 
                 models = []
                 if model1:
-                    models.append((model1, "HOG + SVM", "🔵", "#1f77b4"))
+                    models.append((model1, "HOG + SVM", "🔵"))
                 if model2:
-                    models.append((model2, "Haar Cascade + RF", "🟢", "#2ca02c"))
+                    models.append((model2, "Haar Cascade + RF", "🟢"))
                 if model3:
-                    models.append((model3, "CNN (Deep Learning)", "🔴", "#d62728"))
+                    models.append((model3, "CNN (Deep Learning)", "🔴"))
                 
                 # Контейнер для результатов
-                for model, name, icon, color in models:
+                for model, name, icon in models:
                     with st.container():
-                        st.markdown(f"### {icon} {name}")
+                        st.markdown(f"#### {icon} {name}")
                         
                         with st.spinner(f'Обработка {name}...'):
                             # Предсказание
@@ -444,19 +481,16 @@ with col2:
                             confidence = pred_proba[pred_class] if len(pred_proba) > pred_class else pred_proba[1]
                             prediction = labels_map.get(pred_class, "WithMask" if pred_class == 1 else "WithoutMask")
                             
-                            # Результат
+                            # Просто показываем результат без эмоций
                             if confidence >= confidence_threshold:
-                                if prediction == "WithMask":
-                                    st.success(f"✅ **{prediction}**")
-                                else:
-                                    st.error(f"❌ **{prediction}**")
+                                st.markdown(f"**Результат:** {prediction}")
                             else:
-                                st.warning("⚠️ Низкая уверенность")
+                                st.markdown(f"**Результат:** {prediction} (низкая уверенность)")
                             
                             # Метрики
                             col_a, col_b = st.columns(2)
                             with col_a:
-                                st.metric("Предсказание", prediction)
+                                st.metric("Класс", prediction)
                             with col_b:
                                 st.metric("Уверенность", f"{confidence:.1%}")
                             
@@ -464,7 +498,7 @@ with col2:
                             st.progress(float(confidence))
                             
                             # Детали
-                            with st.expander("📊 Детальная информация"):
+                            with st.expander("Детальная информация"):
                                 for i, label in labels_map.items():
                                     prob = pred_proba[i] if i < len(pred_proba) else 0
                                     st.write(f"{label}: {prob:.2%}")
@@ -497,16 +531,14 @@ with col2:
                         confidence = pred_proba[pred_class] if len(pred_proba) > pred_class else pred_proba[1]
                         prediction = labels_map.get(pred_class, "WithMask" if pred_class == 1 else "WithoutMask")
                         
-                        # Большой результат
-                        st.markdown(f"## {icon} {prediction}")
+                        # Чистый результат без эмоций
+                        st.markdown(f'<div class="result-header">{icon} {prediction}</div>', unsafe_allow_html=True)
                         
+                        # Статус уверенности
                         if confidence >= confidence_threshold:
-                            if prediction == "WithMask":
-                                st.success("✅ Маска обнаружена!")
-                            else:
-                                st.error("❌ Маска не обнаружена!")
+                            st.info(f"Уверенность модели: {confidence:.1%}")
                         else:
-                            st.warning("⚠️ Низкая уверенность в предсказании")
+                            st.warning(f"Уверенность модели: {confidence:.1%} (ниже порога)")
                         
                         # Метрики в колонках
                         col_a, col_b, col_c = st.columns(3)
@@ -522,11 +554,11 @@ with col2:
                             st.metric(
                                 "Уверенность", 
                                 f"{confidence:.1%}",
-                                delta=f"{(confidence-0.5)*100:+.1f}%" if confidence > 0.5 else None
+                                delta=None
                             )
                         
                         with col_c:
-                            status = "✅" if confidence >= confidence_threshold else "⚠️"
+                            status = "Выше порога" if confidence >= confidence_threshold else "Ниже порога"
                             st.metric(
                                 "Статус",
                                 status
@@ -535,19 +567,22 @@ with col2:
                         # Прогресс бар
                         st.progress(float(confidence))
                         
-                        # График вероятностей
-                        st.subheader("📊 Распределение вероятностей")
+                        # Таблица вероятностей вместо графика
+                        st.subheader("Вероятности классов")
                         
                         import pandas as pd
-                        prob_df = pd.DataFrame({
-                            'Класс': [labels_map[i] for i in sorted(labels_map.keys()) if i < len(pred_proba)],
-                            'Вероятность': [pred_proba[i] for i in sorted(labels_map.keys()) if i < len(pred_proba)]
-                        })
+                        prob_data = []
+                        for i, label in labels_map.items():
+                            if i < len(pred_proba):
+                                prob = pred_proba[i]
+                                prob_data.append({"Класс": label, "Вероятность": f"{prob:.2%}"})
                         
-                        st.bar_chart(prob_df.set_index('Класс'))
+                        if prob_data:
+                            prob_df = pd.DataFrame(prob_data)
+                            st.table(prob_df)
                         
                         # Детальная информация
-                        with st.expander("🔬 Детальная информация"):
+                        with st.expander("Детальная информация"):
                             st.write("**Вероятности для каждого класса:**")
                             for i, label in labels_map.items():
                                 if i < len(pred_proba):
@@ -565,16 +600,16 @@ with col2:
     
     else:
         # Placeholder когда нет изображения
-        st.info("👆 Загрузите изображение для начала детекции")
+        st.info("Загрузите изображение для начала детекции")
         
         st.markdown("""
-        ### 💡 Как использовать:
+        ### Как использовать:
         
         1. Загрузите фото человека (с лицом)
         2. Выберите модель для предсказания
         3. Получите результат детекции маски
         
-        ### 📸 Рекомендации:
+        ### Рекомендации:
         
         - Используйте четкие фотографии
         - Лицо должно быть хорошо видно
@@ -586,7 +621,7 @@ with col2:
 st.markdown("---")
 
 # Дополнительная информация
-with st.expander("ℹ️ О системе"):
+with st.expander("О системе"):
     st.markdown("""
     ### Система детекции масок
     
@@ -614,12 +649,12 @@ with st.expander("ℹ️ О системе"):
     - ROC-AUC
     
     ---
-    Разработано в рамках курсового проекта | 2024
+    Разработано в рамках курсового проекта | 2025
     """)
 
 # Copyright
 st.markdown("""
     <div style='text-align: center; color: gray; padding: 20px;'>
-        <p>© 2024 Mask Detection System | Все права защищены</p>
+        <p>© 2024 Mask Detection System</p>
     </div>
 """, unsafe_allow_html=True)
