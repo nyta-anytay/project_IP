@@ -10,10 +10,15 @@ import tensorflow as tf
 import json
 import sys
 import os
+import warnings
+warnings.filterwarnings('ignore')
 
-# Добавляем путь к src
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.config import MODEL1_PATH, MODEL2_PATH, MODEL3_PATH, LABELS_MAP_PATH
+# ===== ВАЖНО: ДЛЯ STREAMLIT CLOUD УБИРАЕМ ПУТИ ИЗ КОНФИГА =====
+# Вместо импорта из config, задаем пути напрямую
+MODEL1_PATH = 'model_hog_svm.pkl'  # или другое имя вашего первого .pkl файла
+MODEL2_PATH = 'model2_haar_rf.pkl'  # или другое имя вашего второго .pkl файла
+MODEL3_PATH = 'model3_cnn.h5'   # имя вашего .h5 файла
+LABELS_MAP_PATH = 'labels_map.json'  # если есть, или задаем вручную
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
 st.set_page_config(
@@ -36,71 +41,151 @@ st.markdown("""
     .stProgress > div > div > div > div {
         background-color: #1f77b4;
     }
-    div[data-Testid="stMetricValue"] {
+    div[data-testid="stMetricValue"] {
         font-size: 1.5rem;
     }
     </style>
 """, unsafe_allow_html=True)
 
+# ===== ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ФАЙЛОВ =====
+def check_files_exist():
+    """Проверяем наличие файлов моделей и labels_map"""
+    files_needed = [MODEL1_PATH, MODEL2_PATH, MODEL3_PATH, LABELS_MAP_PATH]
+    existing_files = []
+    missing_files = []
+    
+    for file in files_needed:
+        if os.path.exists(file):
+            existing_files.append(file)
+        else:
+            missing_files.append(file)
+    
+    return existing_files, missing_files
 
-# ===== ЗАГРУЗКА МОДЕЛЕЙ =====
+# ===== ЗАГРУЗКА МОДЕЛЕЙ С ОБРАБОТКОЙ ОШИБОК =====
 @st.cache_resource
 def load_all_models():
     """Загрузка всех моделей и labels_map"""
+    # Проверяем файлы
+    existing_files, missing_files = check_files_exist()
+    
+    if missing_files:
+        return None, None, None, None, False, f"Отсутствуют файлы: {', '.join(missing_files)}"
+    
     try:
+        # Загрузка labels_map (создаем, если нет файла)
+        if os.path.exists(LABELS_MAP_PATH):
+            with open(LABELS_MAP_PATH, 'r') as f:
+                labels_dict = json.load(f)
+                labels_map = {int(k): v for k, v in labels_dict.items()}
+        else:
+            # Создаем стандартный labels_map
+            labels_map = {0: "Без маски", 1: "С маской"}
+            # Сохраняем для будущего использования
+            with open(LABELS_MAP_PATH, 'w') as f:
+                json.dump(labels_map, f)
+        
+        # Загружаем модели с обработкой ошибок для каждой отдельно
+        models_loaded = []
+        error_messages = []
+        
         # Модель 1
-        with open(MODEL1_PATH, 'rb') as f:
-            model1 = pickle.load(f)
+        try:
+            with open(MODEL1_PATH, 'rb') as f:
+                model1 = pickle.load(f)
+            models_loaded.append(("model_hog_svm", True, ""))
+        except Exception as e:
+            model1 = None
+            models_loaded.append(("model_hog_svm", False, str(e)))
         
         # Модель 2
-        with open(MODEL2_PATH, 'rb') as f:
-            model2 = pickle.load(f)
+        try:
+            with open(MODEL2_PATH, 'rb') as f:
+                model2 = pickle.load(f)
+            models_loaded.append(("model2_haar_rf", True, ""))
+        except Exception as e:
+            model2 = None
+            models_loaded.append(("model2_haar_rf", False, str(e)))
         
-        # Модель 3
-        model3_keras = tf.keras.models.load_model(MODEL3_PATH)
+        # Модель 3 (TensorFlow)
+        try:
+            model3_keras = tf.keras.models.load_model(MODEL3_PATH)
+            # Обертка для CNN
+            class CNNWrapper:
+                def __init__(self, model):
+                    self.model = model
+                def predict_proba(self, X):
+                    return self.model.predict(X, verbose=0)
+            model3 = CNNWrapper(model3_keras)
+            models_loaded.append(("model3_cnn", True, ""))
+        except Exception as e:
+            model3 = None
+            models_loaded.append(("model3_cnn", False, str(e)))
         
-        # Обертка для CNN
-        class CNNWrapper:
-            def __init__(self, model):
-                self.model = model
-            def predict_proba(self, X):
-                return self.model.predict(X, verbose=0)
+        # Проверяем, все ли модели загрузились
+        all_loaded = all(status for _, status, _ in models_loaded)
         
-        model3 = CNNWrapper(model3_keras)
+        # Формируем сообщение об ошибках
+        error_msg = ""
+        if not all_loaded:
+            error_details = [f"{name}: {msg}" for name, status, msg in models_loaded if not status and msg]
+            error_msg = f"Ошибки загрузки: {'; '.join(error_details)}"
         
-        # Загрузка labels_map
-        with open(LABELS_MAP_PATH, 'r') as f:
-            labels_dict = json.load(f)
-            labels_map = {int(k): v for k, v in labels_dict.items()}
+        return model1, model2, model3, labels_map, all_loaded, error_msg
         
-        return model1, model2, model3, labels_map, True, None
-        
-    except FileNotFoundError as e:
-        return None, None, None, None, False, f"Файл не найден: {e}"
     except Exception as e:
-        return None, None, None, None, False, f"Ошибка загрузки: {e}"
+        return None, None, None, None, False, f"Ошибка загрузки: {str(e)}"
 
+# ===== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ В SIDEBAR =====
+with st.sidebar:
+    st.header("🔍 Отладка")
+    
+    if st.checkbox("Показать информацию о файлах"):
+        existing, missing = check_files_exist()
+        st.write("**Найдены файлы:**")
+        for file in existing:
+            st.success(f"✅ {file} ({os.path.getsize(file)} байт)")
+        
+        if missing:
+            st.write("**Отсутствуют файлы:**")
+            for file in missing:
+                st.error(f"❌ {file}")
+    
+    # Принудительная перезагрузка моделей
+    if st.button("🔄 Перезагрузить модели"):
+        st.cache_resource.clear()
+        st.rerun()
 
 # Загрузка моделей
 model1, model2, model3, labels_map, models_loaded, error_msg = load_all_models()
-
 
 # ===== ЗАГОЛОВОК =====
 st.markdown('<h1 class="main-header">😷 Система детекции масок на лице</h1>', 
            unsafe_allow_html=True)
 st.markdown("---")
 
-
-# ===== SIDEBAR =====
+# ===== SIDEBAR: ОСНОВНЫЕ НАСТРОЙКИ =====
 with st.sidebar:
     st.header("⚙️ Настройки")
     
     # Выбор модели
-    model_choice = st.selectbox(
-        "Выберите модель:",
-        ["Все модели", "HOG + SVM", "Haar Cascade + RF", "CNN (Deep Learning)"],
-        help="Выберите модель для предсказания или все сразу"
-    )
+    available_models = []
+    if model1:
+        available_models.append("HOG + SVM")
+    if model2:
+        available_models.append("Haar Cascade + RF")
+    if model3:
+        available_models.append("CNN (Deep Learning)")
+    
+    if available_models:
+        model_choice = st.selectbox(
+            "Выберите модель:",
+            ["Все модели"] + available_models,
+            help="Выберите модель для предсказания"
+        )
+    else:
+        model_choice = "Нет доступных моделей"
+        st.error("Нет доступных моделей для выбора")
     
     # Порог уверенности
     confidence_threshold = st.slider(
@@ -114,58 +199,58 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Информация о моделях
-    st.markdown("### 📊 О моделях")
+    # Информация о загруженных моделях
+    st.markdown("### 📊 Статус моделей")
     
-    with st.expander("🔵 HOG + SVM"):
-        st.markdown("""
-        **Классический метод**
-        - HOG (Histogram of Oriented Gradients)
-        - Support Vector Machine
-        - ⚡ Быстрая работа
-        - 💾 Малый размер модели
-        - 🎯 Хорошо для простых задач
-        """)
+    model_status = [
+        ("model_hog_svm.pkl", model1, "🔵 HOG + SVM"),
+        ("model2_haar_rf.pkl", model2, "🟢 Haar Cascade + RF"),
+        ("model3_cnn.h5", model3, "🔴 CNN (Deep Learning)")
+    ]
     
-    with st.expander("🟢 Haar Cascade + RF"):
-        st.markdown("""
-        **Гибридный подход**
-        - Haar Cascade для детекции лиц
-        - Извлечение множества признаков
-        - Random Forest классификатор
-        - ⚖️ Баланс скорости и точности
-        """)
-    
-    with st.expander("🔴 CNN (Deep Learning)"):
-        st.markdown("""
-        **Глубокое обучение**
-        - Сверточная нейронная сеть
-        - Transfer Learning (MobileNetV2)
-        - Предобучена на ImageNet
-        - 🏆 Наивысшая точность
-        - 🚀 Требует GPU для быстрой работы
-        """)
-    
-    st.markdown("---")
-    
-    # Статистика
-    if models_loaded:
-        st.markdown("### ✅ Статус системы")
-        st.success("Все модели загружены")
-        st.info(f"Классы: {', '.join(labels_map.values())}")
-
+    for file_name, model, display_name in model_status:
+        if model is not None:
+            st.success(f"✅ {display_name}")
+        else:
+            st.error(f"❌ {display_name}")
 
 # ===== ОСНОВНОЙ ИНТЕРФЕЙС =====
 
 # Проверка загрузки моделей
-if not models_loaded:
-    st.error(f"⚠️ Ошибка загрузки моделей: {error_msg}")
+if not models_loaded or (model1 is None and model2 is None and model3 is None):
+    st.error(f"⚠️ Проблема с загрузкой моделей")
+    st.warning(error_msg)
+    
     st.info("""
-    **Что делать:**
-    1. Убедитесь, что вы обучили модели: `python scripts/02_Train_models.py`
-    2. Проверьте наличие файлов в папке `Trained_models/`
-    3. Проверьте наличие файла `results/labels_map.json`
+    **Решение для Streamlit Cloud:**
+    
+    1. **Убедитесь, что файлы моделей добавлены в репозиторий:**
+       - `model_hog_svm.pkl` (ваш первый .pkl файл)
+       - `model2_haar_rf.pkl` (ваш второй .pkl файл)
+       - `model3_cnn.h5` (ваш .h5 файл)
+       - `labels_map.json` (если есть, или будет создан автоматически)
+    
+    2. **Проверьте requirements.txt:**
+       ```txt
+       streamlit
+       tensorflow
+       opencv-python
+       numpy
+       Pillow
+       scikit-learn
+       pandas
+       ```
+    
+    3. **Переименуйте ваши файлы моделей** в соответствии с именами в коде:
+       - Первый .pkl файл → `model_hog_svm.pkl`
+       - Второй .pkl файл → `model2_haar_rf.pkl`
+       - .h5 файл → `model3_cnn.h5`
     """)
+    
+    # Показываем текущую директорию для отладки
+    if st.checkbox("Показать содержимое директории"):
+        st.write("Файлы в директории:", os.listdir('.'))
+    
     st.stop()
 
 # Создание колонок
@@ -194,160 +279,154 @@ with col1:
         camera_image = st.camera_input("Сделайте фото")
         if camera_image is not None:
             uploaded_file = camera_image
-    
-    # Отображение загруженного изображения
-    if uploaded_file is not None:
-        image = Image.open(uploaded_file)
-        st.image(image, caption='Загруженное изображение', use_column_width=True)
-        
-        # Информация об изображении
-        img_array = np.array(image)
-        st.caption(f"Размер: {img_array.shape[1]}x{img_array.shape[0]} пикселей")
 
 # ===== ПРАВАЯ КОЛОНКА: РЕЗУЛЬТАТЫ =====
 with col2:
     st.header("🔍 Результаты детекции")
     
     if uploaded_file is not None:
-        # Обработка изображения
-        img_array = np.array(image)
-        
-        # Конвертация в RGB если нужно
-        if len(img_array.shape) == 2:
-            img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
-        elif img_array.shape[2] == 4:
-            img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
-        
-        # Ресайз для модели
-        img_resized = cv2.resize(img_array, (128, 128))
-        img_input = np.expand_dims(img_resized, axis=0)
-        
-        # ===== ПРЕДСКАЗАНИЯ =====
-        if model_choice == "Все модели":
-            st.subheader("Сравнение всех моделей")
+        try:
+            # Загружаем и обрабатываем изображение
+            image = Image.open(uploaded_file)
             
-            models = [
-                (model1, "HOG + SVM", "🔵", "#1f77b4"),
-                (model2, "Haar Cascade + RF", "🟢", "#2ca02c"),
-                (model3, "CNN (Deep Learning)", "🔴", "#d62728")
-            ]
+            # Показываем изображение в левой колонке
+            with col1:
+                st.image(image, caption='Загруженное изображение', use_column_width=True)
+                img_array = np.array(image)
+                st.caption(f"Размер: {img_array.shape[1]}x{img_array.shape[0]} пикселей")
             
-            # Контейнер для результатов
-            for model, name, icon, color in models:
-                with st.container():
-                    st.markdown(f"### {icon} {name}")
-                    
-                    with st.spinner(f'Обработка {name}...'):
-                        # Предсказание
-                        pred_proba = model.predict_proba(img_input)[0]
-                        pred_class = np.argmax(pred_proba)
-                        confidence = pred_proba[pred_class]
-                        prediction = labels_map[pred_class]
-                        
-                        # Результат
-                        if confidence >= confidence_threshold:
-                            if pred_class == 1:  # С маской
-                                st.success(f"✅ **{prediction}**")
-                            else:  # Без маски
-                                st.error(f"❌ **{prediction}**")
-                        else:
-                            st.warning("⚠️ Низкая уверенность")
-                        
-                        # Метрики
-                        col_a, col_b = st.columns(2)
-                        with col_a:
-                            st.metric("Предсказание", prediction)
-                        with col_b:
-                            st.metric("Уверенность", f"{confidence:.1%}")
-                        
-                        # Прогресс бар
-                        st.progress(float(confidence))
-                        
-                        # Детали
-                        with st.expander("📊 Детальная информация"):
-                            for i, label in labels_map.items():
-                                prob = pred_proba[i]
-                                st.write(f"{label}: {prob:.2%}")
-                    
-                    st.markdown("---")
-        
-        else:
-            # Одна модель
-            st.subheader(f"Результат: {model_choice}")
+            # Обработка изображения для моделей
+            if len(img_array.shape) == 2:
+                img_array = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+            elif img_array.shape[2] == 4:
+                img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
             
-            model_map = {
-                "HOG + SVM": (model1, "🔵"),
-                "Haar Cascade + RF": (model2, "🟢"),
-                "CNN (Deep Learning)": (model3, "🔴")
-            }
+            # Ресайз для модели
+            img_resized = cv2.resize(img_array, (128, 128))
+            img_input = np.expand_dims(img_resized, axis=0) / 255.0  # Нормализация
             
-            model, icon = model_map[model_choice]
-            
-            with st.spinner('Обработка изображения...'):
-                # Предсказание
-                pred_proba = model.predict_proba(img_input)[0]
-                pred_class = np.argmax(pred_proba)
-                confidence = pred_proba[pred_class]
-                prediction = labels_map[pred_class]
+            # ===== ПРЕДСКАЗАНИЯ =====
+            if model_choice == "Все модели":
+                st.subheader("Сравнение всех моделей")
                 
-                # Большой результат
-                st.markdown(f"## {icon} {prediction}")
+                models = []
+                if model1:
+                    models.append((model1, "HOG + SVM", "🔵"))
+                if model2:
+                    models.append((model2, "Haar Cascade + RF", "🟢"))
+                if model3:
+                    models.append((model3, "CNN (Deep Learning)", "🔴"))
                 
-                if confidence >= confidence_threshold:
-                    if pred_class == 1:  # С маской
-                        st.success("✅ Маска обнаружена!")
-                    else:  # Без маски
-                        st.error("❌ Маска не обнаружена!")
+                # Контейнер для результатов
+                for model, name, icon in models:
+                    with st.container():
+                        st.markdown(f"### {icon} {name}")
+                        
+                        with st.spinner(f'Обработка {name}...'):
+                            # Предсказание
+                            try:
+                                pred_proba = model.predict_proba(img_input)[0]
+                                if len(pred_proba) > 2:  # Если вероятности для нескольких классов
+                                    pred_class = np.argmax(pred_proba)
+                                else:
+                                    pred_class = 1 if pred_proba[1] > 0.5 else 0
+                                
+                                confidence = pred_proba[pred_class] if len(pred_proba) > pred_class else pred_proba[1]
+                                
+                                # Используем labels_map для определения класса
+                                if pred_class in labels_map:
+                                    prediction = labels_map[pred_class]
+                                else:
+                                    prediction = "С маской" if pred_class == 1 else "Без маски"
+                                
+                                # Результат
+                                if confidence >= confidence_threshold:
+                                    if prediction == "С маски" or pred_class == 1:
+                                        st.success(f"✅ **{prediction}**")
+                                    else:
+                                        st.error(f"❌ **{prediction}**")
+                                else:
+                                    st.warning("⚠️ Низкая уверенность")
+                                
+                                # Метрики
+                                col_a, col_b = st.columns(2)
+                                with col_a:
+                                    st.metric("Предсказание", prediction)
+                                with col_b:
+                                    st.metric("Уверенность", f"{confidence:.1%}")
+                                
+                                # Прогресс бар
+                                st.progress(float(confidence))
+                                
+                            except Exception as e:
+                                st.error(f"Ошибка предсказания: {str(e)}")
+                        
+                        st.markdown("---")
+            
+            elif model_choice in ["HOG + SVM", "Haar Cascade + RF", "CNN (Deep Learning)"]:
+                # Одна модель
+                st.subheader(f"Результат: {model_choice}")
+                
+                model_map = {
+                    "HOG + SVM": (model1, "🔵"),
+                    "Haar Cascade + RF": (model2, "🟢"),
+                    "CNN (Deep Learning)": (model3, "🔴")
+                }
+                
+                model, icon = model_map[model_choice]
+                
+                if model is None:
+                    st.error(f"Модель {model_choice} не загружена")
                 else:
-                    st.warning("⚠️ Низкая уверенность в предсказании")
-                
-                # Метрики в колонках
-                col_a, col_b, col_c = st.columns(3)
-                
-                with col_a:
-                    st.metric(
-                        "Класс", 
-                        prediction,
-                        delta=None
-                    )
-                
-                with col_b:
-                    st.metric(
-                        "Уверенность", 
-                        f"{confidence:.1%}",
-                        delta=f"{(confidence-0.5)*100:+.1f}%" if confidence > 0.5 else None
-                    )
-                
-                with col_c:
-                    status = "✅" if confidence >= confidence_threshold else "⚠️"
-                    st.metric(
-                        "Статус",
-                        status
-                    )
-                
-                # Прогресс бар
-                st.progress(float(confidence))
-                
-                # График вероятностей
-                st.subheader("📊 Распределение вероятностей")
-                
-                import pandas as pd
-                prob_df = pd.DataFrame({
-                    'Класс': [labels_map[i] for i in sorted(labels_map.keys())],
-                    'Вероятность': [pred_proba[i] for i in sorted(labels_map.keys())]
-                })
-                
-                st.bar_chart(prob_df.set_index('Класс'))
-                
-                # Детальная информация
-                with st.expander("🔬 Детальная информация"):
-                    st.write("**Вероятности для каждого класса:**")
-                    for i, label in labels_map.items():
-                        prob = pred_proba[i]
-                        st.write(f"- {label}: {prob:.4f} ({prob*100:.2f}%)")
-                    
-                    st.write(f"\n**Порог уверенности:** {confidence_threshold}")
-                    st.write(f"**Размер входного изображения:** 128x128")
+                    with st.spinner('Обработка изображения...'):
+                        try:
+                            # Предсказание
+                            pred_proba = model.predict_proba(img_input)[0]
+                            
+                            if len(pred_proba) > 2:
+                                pred_class = np.argmax(pred_proba)
+                            else:
+                                pred_class = 1 if pred_proba[1] > 0.5 else 0
+                            
+                            confidence = pred_proba[pred_class] if len(pred_proba) > pred_class else pred_proba[1]
+                            
+                            if pred_class in labels_map:
+                                prediction = labels_map[pred_class]
+                            else:
+                                prediction = "С маской" if pred_class == 1 else "Без маски"
+                            
+                            # Большой результат
+                            st.markdown(f"## {icon} {prediction}")
+                            
+                            if confidence >= confidence_threshold:
+                                if prediction == "С маски" or pred_class == 1:
+                                    st.success("✅ Маска обнаружена!")
+                                else:
+                                    st.error("❌ Маска не обнаружена!")
+                            else:
+                                st.warning("⚠️ Низкая уверенность в предсказании")
+                            
+                            # Метрики
+                            col_a, col_b, col_c = st.columns(3)
+                            
+                            with col_a:
+                                st.metric("Класс", prediction)
+                            
+                            with col_b:
+                                st.metric("Уверенность", f"{confidence:.1%}")
+                            
+                            with col_c:
+                                status = "✅" if confidence >= confidence_threshold else "⚠️"
+                                st.metric("Статус", status)
+                            
+                            # Прогресс бар
+                            st.progress(float(confidence))
+                            
+                        except Exception as e:
+                            st.error(f"Ошибка предсказания: {str(e)}")
+        
+        except Exception as e:
+            st.error(f"Ошибка обработки изображения: {str(e)}")
     
     else:
         # Placeholder когда нет изображения
@@ -359,54 +438,48 @@ with col2:
         1. Загрузите фото человека (с лицом)
         2. Выберите модель для предсказания
         3. Получите результат детекции маски
-        
-        ### 📸 Рекомендации:
-        
-        - Используйте четкие фотографии
-        - Лицо должно быть хорошо видно
-        - Избегайте сильных теней
-        - Оптимальное расстояние: портретная съемка
         """)
-
 
 # ===== FOOTER =====
 st.markdown("---")
 
-# Дополнительная информация
-with st.expander("ℹ️ О системе"):
+with st.expander("ℹ️ Инструкция по деплою на Streamlit Cloud"):
     st.markdown("""
-    ### Система детекции масок
+    ### Как развернуть это приложение:
     
-    Эта система использует три различных подхода к классификации изображений:
+    1. **Подготовьте файлы моделей:**
+       - Переименуйте ваши файлы:
+         - Первый .pkl → `model_hog_svm.pkl`
+         - Второй .pkl → `model2_haar_rf.pkl`
+         - .h5 файл → `model3_cnn.h5`
     
-    1. **Классические методы компьютерного зрения**
-       - HOG + SVM
-       - Haar Cascade + Random Forest
+    2. **Создайте requirements.txt:**
+       ```txt
+       streamlit==1.29.0
+       tensorflow==2.15.0
+       opencv-python==4.8.1
+       numpy==1.24.3
+       Pillow==10.1.0
+       scikit-learn==1.3.2
+       pandas==2.1.4
+       ```
     
-    2. **Глубокое обучение**
-       - CNN с Transfer Learning (MobileNetV2)
+    3. **Загрузите на GitHub:**
+       - `app.py` (этот файл)
+       - `model_hog_svm.pkl`, `model2_haar_rf.pkl`, `model3_cnn.h5`
+       - `requirements.txt`
+       - (опционально) `labels_map.json`
     
-    ### Технологии:
-    - Python 3.8+
-    - OpenCV
-    - scikit-learn
-    - TensorFlow/Keras
-    - Streamlit
-    
-    ### Метрики качества:
-    - Accuracy (Точность)
-    - Precision (Прецизионность)
-    - Recall (Полнота)
-    - F1-Score
-    - ROC-AUC
-    
-    ---
-    Разработано в рамках курсового проекта | 2024
+    4. **Деплой на Streamlit Cloud:**
+       - Зайдите на [share.streamlit.io](https://share.streamlit.io)
+       - Подключите GitHub репозиторий
+       - Выберите файл `app.py`
+       - Нажмите Deploy
     """)
 
 # Copyright
 st.markdown("""
     <div style='text-align: center; color: gray; padding: 20px;'>
-        <p>© 2024 Mask Detection System | Все права защищены</p>
+        <p>© 2024 Mask Detection System</p>
     </div>
 """, unsafe_allow_html=True)
