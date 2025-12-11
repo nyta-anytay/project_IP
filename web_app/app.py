@@ -77,7 +77,52 @@ class HaarCascade_RF_Model:
         self.model = None
         self.name = "Haar Cascade + RF"
         self.cascade_path = None
+
+    def _patch_missing_tree_attrs(self):
+        """Патчим отсутствующие поля у деревьев RandomForest."""
+        try:
+            estimators = getattr(self.model, "estimators_", None)
+            if estimators is None:
+                return
+
+            for est in estimators:
+                # Добавляем атрибут, если он отсутствует
+                if not hasattr(est, "monotonic_cst"):
+                    setattr(est, "monotonic_cst", None)
+
+                tree_obj = getattr(est, "tree_", None)
+                if tree_obj is not None and not hasattr(tree_obj, "monotonic_cst"):
+                    setattr(tree_obj, "monotonic_cst", None)
+
+        except Exception:
+            pass
+
     
+class HaarCascade_RF_Model:
+    """Фейковый класс для unpickle"""
+    def __init__(self):
+        self.face_cascade = None
+        self.model = None
+        self.name = "Haar Cascade + RF"
+        self.cascade_path = None
+
+    def _patch_missing_tree_attrs(self):
+        """Патчим отсутствующие атрибуты у деревьев RandomForest."""
+        try:
+            estimators = getattr(self.model, "estimators_", None)
+            if estimators is None:
+                return
+
+            for est in estimators:
+                if not hasattr(est, "monotonic_cst"):
+                    setattr(est, "monotonic_cst", None)
+
+                tree_obj = getattr(est, "tree_", None)
+                if tree_obj is not None and not hasattr(tree_obj, "monotonic_cst"):
+                    setattr(tree_obj, "monotonic_cst", None)
+        except Exception:
+            pass
+
     def predict_proba(self, X):
         # Загружаем Haar Cascade если еще нет
         if self.face_cascade is None:
@@ -87,26 +132,25 @@ class HaarCascade_RF_Model:
                 )
             except:
                 pass
-        
+
         features = []
-        
+
         for img in X:
-            # Денормализация если нужно
+            # Денормализация
             if img.max() <= 1.0:
                 img = (img * 255).astype(np.uint8)
-            
+
             gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-            
             feat = []
-            
+
             # 1. Статистики
             feat.extend([gray.mean(), gray.std(), gray.min(), gray.max()])
-            
+
             # 2. Гистограмма
             hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
             feat.extend(hist.flatten())
-            
-            # 3. Детекция лиц
+
+            # 3. Количество лиц
             if self.face_cascade is not None:
                 try:
                     faces = self.face_cascade.detectMultiScale(
@@ -117,22 +161,32 @@ class HaarCascade_RF_Model:
                     feat.append(0)
             else:
                 feat.append(0)
-            
+
             # 4. Цветовые статистики
             for channel in range(3):
                 feat.extend([
                     img[:, :, channel].mean(),
                     img[:, :, channel].std()
                 ])
-            
+
             # 5. Края
             edges = cv2.Canny(gray, 100, 200)
             feat.extend([edges.mean(), edges.std()])
-            
+
             features.append(feat)
-        
+
         X_features = np.array(features)
-        return self.model.predict_proba(X_features)
+
+        # ========== FIX ERROR HERE ==========
+        try:
+            return self.model.predict_proba(X_features)
+
+        except AttributeError as e:
+            if "monotonic_cst" in str(e) or "monotonic" in str(e):
+                self._patch_missing_tree_attrs()
+                return self.model.predict_proba(X_features)
+            raise e
+
 
 # Добавляем классы в фейковый модуль
 sys.modules['src.models'].HOG_SVM_Model = HOG_SVM_Model
