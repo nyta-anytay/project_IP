@@ -13,12 +13,11 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 
-# ===== ПУТИ К ФАЙЛАМ =====
-# ВАЖНО: все файлы должны быть в той же папке, что и app.py
-MODEL1_PATH = 'model1_hog_svm.pkl'    # Первый .pkl файл
-MODEL2_PATH = 'model2_haar_rf.pkl'    # Второй .pkl файл  
-MODEL3_PATH = 'model3_cnn.h5'         # .h5 файл
-LABELS_MAP_PATH = 'labels_map.json'  # JSON с метками
+# ===== ПУТИ К ФАЙЛАМ (ОРИГИНАЛЬНЫЕ ИМЕНА) =====
+MODEL1_PATH = 'model1_hog_svm.pkl'    # Ваш первый .pkl файл
+MODEL2_PATH = 'model2_haar_rf.pkl'    # Ваш второй .pkl файл  
+MODEL3_PATH = 'model3_cnn.h5'         # Ваш .h5 файл
+LABELS_MAP_PATH = 'labels_map.json'   # JSON с метками
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
 st.set_page_config(
@@ -62,56 +61,105 @@ def check_files_exist():
     
     return existing_files, missing_files
 
+# ===== ФУНКЦИЯ ПОИСКА ФАЙЛОВ В ПОДПАПКАХ =====
+def find_files_in_subfolders():
+    """Ищем файлы моделей в разных подпапках"""
+    possible_locations = [
+        '.',  # текущая директория
+        'web_app',
+        'Trained_models',
+        'models',
+        'data',
+        'src'
+    ]
+    
+    found_files = {}
+    
+    # Ищем каждый файл во всех возможных местах
+    target_files = [
+        ('model1_hog_svm.pkl', MODEL1_PATH),
+        ('model2_haar_rf.pkl', MODEL2_PATH),
+        ('model3_cnn.h5', MODEL3_PATH),
+        ('labels_map.json', LABELS_MAP_PATH)
+    ]
+    
+    for filename, path_key in target_files:
+        found = False
+        for location in possible_locations:
+            full_path = os.path.join(location, filename)
+            if os.path.exists(full_path):
+                found_files[path_key] = full_path
+                found = True
+                break
+        
+        if not found:
+            found_files[path_key] = None
+    
+    return found_files
+
 # ===== ЗАГРУЗКА МОДЕЛЕЙ С ОБРАБОТКОЙ ОШИБОК =====
 @st.cache_resource
 def load_all_models():
     """Загрузка всех моделей и labels_map"""
-    # Проверяем файлы
-    existing_files, missing_files = check_files_exist()
+    # Ищем файлы в подпапках
+    file_locations = find_files_in_subfolders()
     
-    if missing_files:
-        st.warning(f"⚠️ Отсутствуют файлы: {', '.join(missing_files)}")
-        st.info(f"✅ Найдены файлы: {', '.join(existing_files) if existing_files else 'нет'}")
+    # Показываем где найдены файлы
+    st.sidebar.subheader("🔍 Поиск файлов")
+    
+    for file_key, found_path in file_locations.items():
+        if found_path:
+            st.sidebar.success(f"✅ {os.path.basename(file_key)}: {found_path}")
+        else:
+            st.sidebar.error(f"❌ {os.path.basename(file_key)}: не найден")
     
     try:
         # ===== labels_map =====
-        if os.path.exists(LABELS_MAP_PATH):
-            with open(LABELS_MAP_PATH, 'r') as f:
+        labels_map_path = file_locations[LABELS_MAP_PATH] or LABELS_MAP_PATH
+        if os.path.exists(labels_map_path):
+            with open(labels_map_path, 'r') as f:
                 labels_dict = json.load(f)
                 labels_map = {int(k): v for k, v in labels_dict.items()}
-                st.sidebar.success(f"✅ labels_map загружен: {labels_map}")
         else:
+            # Создаем стандартный labels_map
             labels_map = {0: "Без маски", 1: "С маской"}
-            st.sidebar.info(f"ℹ️ Используется стандартный labels_map: {labels_map}")
+            st.sidebar.info("ℹ️ Используется стандартный labels_map")
 
         models_loaded = []
         model1, model2, model3 = None, None, None
 
         # ===== Модель 1: HOG + SVM =====
-        try:
-            with open(MODEL1_PATH, 'rb') as f:
-                model1 = pickle.load(f)
-            models_loaded.append(("model1_hog_svm", True, ""))
-            st.sidebar.success(f"✅ {MODEL1_PATH} загружена")
-        except Exception as e:
-            models_loaded.append(("model1_hog_svm", False, str(e)))
-            st.sidebar.error(f"❌ Ошибка загрузки {MODEL1_PATH}: {str(e)[:50]}...")
+        model1_path = file_locations[MODEL1_PATH] or MODEL1_PATH
+        if os.path.exists(model1_path):
+            try:
+                with open(model1_path, 'rb') as f:
+                    model1 = pickle.load(f)
+                models_loaded.append(("model1_hog_svm", True, ""))
+            except Exception as e:
+                models_loaded.append(("model1_hog_svm", False, str(e)))
+                st.sidebar.error(f"❌ Ошибка загрузки model1: {str(e)[:50]}")
+        else:
+            models_loaded.append(("model1_hog_svm", False, f"Файл не найден: {model1_path}"))
 
         # ===== Модель 2: Haar + RF =====
-        try:
-            with open(MODEL2_PATH, 'rb') as f:
-                model2 = pickle.load(f)
-            models_loaded.append(("model2_haar_rf", True, ""))
-            st.sidebar.success(f"✅ {MODEL2_PATH} загружена")
-        except Exception as e:
-            models_loaded.append(("model2_haar_rf", False, str(e)))
-            st.sidebar.error(f"❌ Ошибка загрузки {MODEL2_PATH}: {str(e)[:50]}...")
+        model2_path = file_locations[MODEL2_PATH] or MODEL2_PATH
+        if os.path.exists(model2_path):
+            try:
+                with open(model2_path, 'rb') as f:
+                    model2 = pickle.load(f)
+                models_loaded.append(("model2_haar_rf", True, ""))
+            except Exception as e:
+                models_loaded.append(("model2_haar_rf", False, str(e)))
+                st.sidebar.error(f"❌ Ошибка загрузки model2: {str(e)[:50]}")
+        else:
+            models_loaded.append(("model2_haar_rf", False, f"Файл не найден: {model2_path}"))
 
         # ===== Модель 3: CNN =====
-        try:
-            if os.path.exists(MODEL3_PATH):
+        model3_path = file_locations[MODEL3_PATH] or MODEL3_PATH
+        if os.path.exists(model3_path):
+            try:
                 model3_keras = load_model(
-                    MODEL3_PATH,
+                    model3_path,
                     compile=False,
                     custom_objects={'BatchNormalization': BatchNormalization}
                 )
@@ -124,13 +172,11 @@ def load_all_models():
                 
                 model3 = CNNWrapper(model3_keras)
                 models_loaded.append(("model3_cnn", True, ""))
-                st.sidebar.success(f"✅ {MODEL3_PATH} загружена")
-            else:
-                models_loaded.append(("model3_cnn", False, f"Файл не найден: {MODEL3_PATH}"))
-                st.sidebar.error(f"❌ Файл не найден: {MODEL3_PATH}")
-        except Exception as e:
-            models_loaded.append(("model_cnn3", False, str(e)))
-            st.sidebar.error(f"❌ Ошибка загрузки {MODEL3_PATH}: {str(e)[:50]}...")
+            except Exception as e:
+                models_loaded.append(("model3_cnn", False, str(e)))
+                st.sidebar.error(f"❌ Ошибка загрузки model3: {str(e)[:50]}")
+        else:
+            models_loaded.append(("model3_cnn", False, f"Файл не найден: {model3_path}"))
 
         # Проверяем, есть ли хотя бы одна модель
         any_loaded = any(status for _, status, _ in models_loaded)
@@ -158,18 +204,22 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Настройки")
     
-    # Информация о файлах
-    if st.checkbox("📁 Показать информацию о файлах", True):
-        existing, missing = check_files_exist()
-        st.write("**Найдены файлы:**")
-        for file in existing:
-            size_kb = os.path.getsize(file) / 1024
-            st.success(f"✅ {file} ({size_kb:.1f} KB)")
+    # Информация о структуре проекта
+    if st.checkbox("📁 Показать структуру проекта", True):
+        st.write("**Текущая директория:**", os.getcwd())
+        st.write("**Содержимое:**")
         
-        if missing:
-            st.write("**Отсутствуют файлы:**")
-            for file in missing:
-                st.error(f"❌ {file}")
+        # Показываем содержимое с рекурсией
+        def list_files(startpath):
+            for root, dirs, files in os.walk(startpath):
+                level = root.replace(startpath, '').count(os.sep)
+                indent = ' ' * 4 * level
+                st.text(f'{indent}{os.path.basename(root)}/')
+                subindent = ' ' * 4 * (level + 1)
+                for f in files[:10]:  # показываем первые 10 файлов
+                    st.text(f'{subindent}{f}')
+        
+        list_files('.')
     
     # Выбор модели
     available_models = []
@@ -211,11 +261,14 @@ with st.sidebar:
     st.markdown("### 📊 Статус моделей")
     status_col1, status_col2, status_col3 = st.columns(3)
     with status_col1:
-        st.metric("HOG+SVM", "✅" if model1 else "❌")
+        st.metric("HOG+SVM", "✅" if model1 else "❌", 
+                 delta="Загружена" if model1 else "Не найден")
     with status_col2:
-        st.metric("Haar+RF", "✅" if model2 else "❌")
+        st.metric("Haar+RF", "✅" if model2 else "❌",
+                 delta="Загружена" if model2 else "Не найден")
     with status_col3:
-        st.metric("CNN", "✅" if model3 else "❌")
+        st.metric("CNN", "✅" if model3 else "❌",
+                 delta="Загружена" if model3 else "Не найден")
 
 # ===== ОСНОВНОЙ ИНТЕРФЕЙС =====
 
@@ -224,48 +277,84 @@ if not models_loaded:
     st.error("⚠️ Не удалось загрузить ни одной модели!")
     st.warning(error_msg)
     
+    # Диагностическая информация
+    st.subheader("🔍 Диагностика проблемы")
+    
+    # Проверяем наличие файлов
+    existing, missing = check_files_exist()
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write("**Найдены файлы:**")
+        if existing:
+            for file in existing:
+                st.success(f"✅ {file}")
+        else:
+            st.error("❌ Файлы не найдены")
+    
+    with col2:
+        st.write("**Отсутствуют файлы:**")
+        if missing:
+            for file in missing:
+                st.error(f"❌ {file}")
+    
+    # Инструкция
     st.info("""
-    ## 🚀 Решение для Streamlit Cloud:
+    ## 🚀 Как исправить:
     
-    ### 1. **Создайте правильную структуру файлов:**
+    ### 1. **Убедитесь, что файлы загружены в репозиторий:**
     ```
-    ваша-папка/
-    ├── app.py                    # Этот файл
-    ├── model_hog_svm.pkl        # Ваш первый .pkl
-    ├── model_haar_rf.pkl        # Ваш второй .pkl  
-    ├── model_cnn.h5             # Ваш .h5 файл
-    ├── labels_map.json          # JSON с метками (или будет создан)
-    └── requirements.txt         # Список зависимостей
+    model1_hog_svm.pkl
+    model2_haar_rf.pkl  
+    model3_cnn.h5
+    labels_map.json (опционально)
     ```
     
-    ### 2. **Переименуйте ваши файлы:**
-    ```bash
-    # Ваши текущие файлы должны называться так:
-    mv ваш_файл1.pkl model_hog_svm.pkl
-    mv ваш_файл2.pkl model_haar_rf.pkl  
-    mv ваш_файл.h5 model_cnn.h5
-    ```
+    ### 2. **Поместите файлы в правильную папку:**
+    - Все файлы должны быть в **корне проекта** или в папке **web_app/**
+    - На Streamlit Cloud путь будет выглядеть так:
+      ```
+      /mount/src/ваш-репозиторий/
+      ├── app.py
+      ├── model1_hog_svm.pkl
+      ├── model2_haar_rf.pkl
+      ├── model3_cnn.h5
+      └── requirements.txt
+      ```
     
-    ### 3. **Создайте requirements.txt:**
+    ### 3. **Обновите requirements.txt:**
     ```txt
-    streamlit==1.29.0
+    streamlit
     tensorflow==2.15.0
-    opencv-python-headless==4.8.1  # Используйте headless версию!
-    numpy==1.24.3
-    Pillow==10.1.0
-    scikit-learn==1.3.2
-    pandas==2.1.4
+    opencv-python-headless
+    numpy
+    Pillow
+    scikit-learn
     ```
     
-    ### 4. **Загрузите ВСЕ файлы на GitHub** (не только код!)
+    ### 4. **Перезапустите приложение на Streamlit Cloud**
     """)
     
-    # Показываем текущую директорию
-    if st.checkbox("Показать содержимое текущей директории"):
-        st.write("Текущая рабочая директория:", os.getcwd())
-        st.write("Содержимое:", os.listdir('.'))
+    # Показываем текущую структуру
+    if st.checkbox("📂 Показать полную структуру файлов"):
+        st.write("**Все файлы и папки:**")
+        
+        import pathlib
+        path = pathlib.Path('.')
+        
+        for file_path in path.rglob('*'):
+            if file_path.is_file():
+                # Подсвечиваем файлы моделей
+                if 'model' in file_path.name.lower() or 'cnn' in file_path.name.lower():
+                    st.success(f"🔍 {file_path}")
+                else:
+                    st.text(f"   {file_path}")
     
     st.stop()
+
+# ===== ОСНОВНОЙ ИНТЕРФЕЙС (если модели загружены) =====
+st.success(f"✅ Загружено моделей: {sum([1 for m in [model1, model2, model3] if m is not None])}/3")
 
 # Создание колонок
 col1, col2 = st.columns([1, 1], gap="large")
@@ -314,7 +403,7 @@ with col2:
             elif img_array.shape[2] == 4:
                 img_array = cv2.cvtColor(img_array, cv2.COLOR_RGBA2RGB)
             
-            # Ресайз для модели (убедитесь, что размер соответствует вашим моделям)
+            # Ресайз для модели
             img_resized = cv2.resize(img_array, (128, 128))
             img_input = np.expand_dims(img_resized, axis=0) / 255.0  # Нормализация
             
@@ -434,11 +523,6 @@ with col2:
         1. **Загрузите фото** человека (лицо должно быть видно)
         2. **Выберите модель** для предсказания
         3. **Получите результат** детекции маски
-        
-        ### 🎯 Рекомендации:
-        - Четкое, хорошо освещенное лицо
-        - Портретная ориентация
-        - Минимум посторонних объектов
         """)
 
 # ===== FOOTER =====
@@ -446,20 +530,19 @@ st.markdown("---")
 
 with st.expander("📋 Инструкция по деплою"):
     st.markdown("""
-    ### Для успешного деплоя на Streamlit Cloud:
+    ## 📁 Правильная структура для Streamlit Cloud:
     
-    1. **Создайте репозиторий со следующей структурой:**
     ```
-    mask-detection-app/
+    ваш-репозиторий/
     ├── app.py                    # Этот файл
-    ├── model_hog_svm.pkl        # Ваш HOG+SVM .pkl
-    ├── model_haar_rf.pkl        # Ваш Haar+RF .pkl
-    ├── model_cnn.h5             # Ваша CNN .h5
-    ├── labels_map.json          # (опционально)
-    └── requirements.txt         # Важные!
+    ├── model1_hog_svm.pkl       # HOG+SVM модель (.pkl)
+    ├── model2_haar_rf.pkl       # Haar+RF модель (.pkl)
+    ├── model3_cnn.h5            # CNN модель (.h5)
+    ├── labels_map.json          # Файл с метками (опционально)
+    └── requirements.txt         # Список зависимостей (ВАЖНО!)
     ```
     
-    2. **requirements.txt должен содержать:**
+    ## 📝 requirements.txt:
     ```txt
     streamlit==1.29.0
     tensorflow==2.15.0
@@ -469,15 +552,16 @@ with st.expander("📋 Инструкция по деплою"):
     scikit-learn==1.3.2
     ```
     
-    3. **На Streamlit Cloud:**
-       - Подключите GitHub репозиторий
-       - Main file path: `app.py`
-       - Нажмите Deploy
+    ## 🔧 Если файлы в подпапке web_app:
+    - Либо переместите файлы в корень
+    - Либо измените пути в коде:
+    ```python
+    MODEL1_PATH = 'web_app/model1_hog_svm.pkl'
+    ```
     """)
 
-# Copyright
 st.markdown("""
     <div style='text-align: center; color: gray; padding: 20px;'>
-        <p>© 2024 Mask Detection System</p>
+        <p>© 2024 Mask Detection System | model1_hog_svm.pkl, model2_haar_rf.pkl, model3_cnn.h5</p>
     </div>
 """, unsafe_allow_html=True)
