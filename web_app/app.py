@@ -6,15 +6,139 @@ import cv2
 import numpy as np
 from PIL import Image
 import pickle
-import tensorflow as tf
-from tensorflow import keras
 import json
 import os
 import warnings
 warnings.filterwarnings('ignore')
 
+# ===== ИМПОРТЫ ДЛЯ TENSORFLOW =====
+try:
+    import tensorflow as tf
+    from tensorflow.keras.models import load_model
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+
+# ===== СОЗДАЕМ ФЕЙКОВЫЕ МОДУЛИ ДЛЯ UNPICKLE =====
+import sys
+import types
+
+# Создаем фейковый модуль src
+if 'src' not in sys.modules:
+    src_module = types.ModuleType('src')
+    sys.modules['src'] = src_module
+    
+    # Создаем src.models
+    models_module = types.ModuleType('src.models')
+    sys.modules['src.models'] = models_module
+    src_module.models = models_module
+    
+    # Создаем другие подмодули
+    for submodule_name in ['config', 'utils', 'data_preparation', 'evaluation']:
+        submodule = types.ModuleType(f'src.{submodule_name}')
+        sys.modules[f'src.{submodule_name}'] = submodule
+        setattr(src_module, submodule_name, submodule)
+
+# ===== ОПРЕДЕЛЯЕМ ФЕЙКОВЫЕ КЛАССЫ МОДЕЛЕЙ =====
+class HOG_SVM_Model:
+    """Фейковый класс для unpickle"""
+    def __init__(self):
+        self.scaler = None
+        self.model = None
+        self.name = "HOG + SVM"
+    
+    def predict_proba(self, X):
+        from skimage.feature import hog
+        features = []
+        for img in X:
+            # Денормализация если нужно
+            if img.max() <= 1.0:
+                img = (img * 255).astype(np.uint8)
+            
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            fd = hog(
+                gray, 
+                orientations=9,
+                pixels_per_cell=(8, 8),
+                cells_per_block=(2, 2),
+                visualize=False,
+                channel_axis=None
+            )
+            features.append(fd)
+        
+        X_features = np.array(features)
+        X_scaled = self.scaler.transform(X_features)
+        return self.model.predict_proba(X_scaled)
+
+class HaarCascade_RF_Model:
+    """Фейковый класс для unpickle"""
+    def __init__(self):
+        self.face_cascade = None
+        self.model = None
+        self.name = "Haar Cascade + RF"
+        self.cascade_path = None
+    
+    def predict_proba(self, X):
+        # Загружаем Haar Cascade если еще нет
+        if self.face_cascade is None:
+            try:
+                self.face_cascade = cv2.CascadeClassifier(
+                    cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+                )
+            except:
+                pass
+        
+        features = []
+        
+        for img in X:
+            # Денормализация если нужно
+            if img.max() <= 1.0:
+                img = (img * 255).astype(np.uint8)
+            
+            gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
+            
+            feat = []
+            
+            # 1. Статистики
+            feat.extend([gray.mean(), gray.std(), gray.min(), gray.max()])
+            
+            # 2. Гистограмма
+            hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
+            feat.extend(hist.flatten())
+            
+            # 3. Детекция лиц
+            if self.face_cascade is not None:
+                try:
+                    faces = self.face_cascade.detectMultiScale(
+                        gray, 1.1, 4, minSize=(20, 20)
+                    )
+                    feat.append(len(faces))
+                except:
+                    feat.append(0)
+            else:
+                feat.append(0)
+            
+            # 4. Цветовые статистики
+            for channel in range(3):
+                feat.extend([
+                    img[:, :, channel].mean(),
+                    img[:, :, channel].std()
+                ])
+            
+            # 5. Края
+            edges = cv2.Canny(gray, 100, 200)
+            feat.extend([edges.mean(), edges.std()])
+            
+            features.append(feat)
+        
+        X_features = np.array(features)
+        return self.model.predict_proba(X_features)
+
+# Добавляем классы в фейковый модуль
+sys.modules['src.models'].HOG_SVM_Model = HOG_SVM_Model
+sys.modules['src.models'].HaarCascade_RF_Model = HaarCascade_RF_Model
+
 # ===== ПУТИ К МОДЕЛЯМ =====
-# Модели находятся в папке trained_models/
 BASE_DIR = os.getcwd()
 TRAINED_MODELS_DIR = os.path.join(BASE_DIR, 'trained_models')
 
@@ -23,66 +147,91 @@ MODEL2_PATH = os.path.join(TRAINED_MODELS_DIR, 'model2_haar_rf.pkl')
 MODEL3_PATH = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn.h5')
 LABELS_MAP_PATH = os.path.join(TRAINED_MODELS_DIR, 'labels_map.json')
 
-# ===== ДИАГНОСТИКА =====
-st.sidebar.header("🔍 Диагностика")
-
-# Проверяем структуру
-st.sidebar.write(f"**Текущий путь:** `{BASE_DIR}`")
-st.sidebar.write(f"**Папка trained_models:** `{TRAINED_MODELS_DIR}`")
-
-# Проверяем существование папки trained_models
-if os.path.exists(TRAINED_MODELS_DIR):
-    st.sidebar.success(f"✅ Папка trained_models/ найдена")
-    
-    # Показываем содержимое
-    files_in_trained_models = os.listdir(TRAINED_MODELS_DIR)
-    st.sidebar.write(f"**Файлов в trained_models/:** {len(files_in_trained_models)}")
-    
-    st.sidebar.write("**Содержимое trained_models/:**")
-    for file in sorted(files_in_trained_models):
-        file_path = os.path.join(TRAINED_MODELS_DIR, file)
-        if os.path.isfile(file_path):
-            size_kb = os.path.getsize(file_path) / 1024
-            st.sidebar.write(f"📄 {file} ({size_kb:.1f} KB)")
-        else:
-            st.sidebar.write(f"📁 {file}/")
-else:
-    st.sidebar.error(f"❌ Папка trained_models/ не найдена!")
-
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
 st.set_page_config(
     page_title="Mask Detection System",
     page_icon="😷",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
-# ===== КАСТОМНЫЕ СТИЛИ =====
-st.markdown("""
-    <style>
-    .main-header {
-        font-size: 3.5rem;
-        color: #1f77b4;
-        text-align: center;
-        margin-bottom: 2rem;
-        text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-    }
-    .warning-box {
-        background-color: #fff3cd;
-        border: 1px solid #ffeaa7;
-        padding: 15px;
-        border-radius: 5px;
-        margin-bottom: 20px;
-    }
-    .success-box {
-        background-color: #d4edda;
-        border: 1px solid #c3e6cb;
-        padding: 15px;
-        border-radius: 5px;
-        margin-bottom: 20px;
-    }
-    </style>
-""", unsafe_allow_html=True)
+# ===== ЗАГРУЗКА МОДЕЛЕЙ =====
+@st.cache_resource
+def load_models_from_trained_models():
+    """Загружаем модели с фейковыми классами"""
+    
+    if not os.path.exists(TRAINED_MODELS_DIR):
+        return None, None, None, {}, False, "Папка trained_models/ не найдена"
+    
+    try:
+        # Labels
+        labels_map = {0: 'WithoutMask', 1: 'WithMask'}
+        if os.path.exists(LABELS_MAP_PATH):
+            try:
+                with open(LABELS_MAP_PATH, 'r') as f:
+                    labels_dict = json.load(f)
+                    labels_map = {int(k): v for k, v in labels_dict.items()}
+            except:
+                pass
+        
+        model1, model2, model3 = None, None, None
+        
+        # ===== МОДЕЛЬ 1 =====
+        if os.path.exists(MODEL1_PATH):
+            try:
+                with open(MODEL1_PATH, 'rb') as f:
+                    model1 = pickle.load(f)
+                st.sidebar.success("✅ HOG + SVM загружена")
+            except Exception as e:
+                st.sidebar.error(f"❌ Model1: {str(e)[:100]}")
+        
+        # ===== МОДЕЛЬ 2 =====
+        if os.path.exists(MODEL2_PATH):
+            try:
+                with open(MODEL2_PATH, 'rb') as f:
+                    model2 = pickle.load(f)
+                st.sidebar.success("✅ Haar + RF загружена")
+            except Exception as e:
+                st.sidebar.error(f"❌ Model2: {str(e)[:100]}")
+        
+        # ===== МОДЕЛЬ 3 =====
+        if os.path.exists(MODEL3_PATH) and TF_AVAILABLE:
+            try:
+                model3_keras = load_model(MODEL3_PATH, compile=False)
+                
+                class CNNWrapper:
+                    def __init__(self, model):
+                        self.model = model
+                    
+                    def predict_proba(self, X):
+                        # CNN ожидает нормализованный вход [0, 1]
+                        if X.max() > 1.0:
+                            X = X / 255.0
+                        
+                        predictions = self.model.predict(X, verbose=0)
+                        
+                        if predictions.shape[-1] == 1:
+                            prob = predictions.flatten()
+                            return np.column_stack([1 - prob, prob])
+                        
+                        return predictions
+                
+                model3 = CNNWrapper(model3_keras)
+                st.sidebar.success("✅ CNN загружена")
+                
+            except Exception as e:
+                st.sidebar.error(f"❌ Model3: {str(e)[:100]}")
+        
+        any_loaded = model1 is not None or model2 is not None or model3 is not None
+        
+        return model1, model2, model3, labels_map, any_loaded, ""
+        
+    except Exception as e:
+        return None, None, None, {}, False, str(e)
+
+# Загрузка
+model1, model2, model3, labels_map, models_loaded, error_msg = load_models_from_trained_models()
+
+# ДАЛЬШЕ ИДЕТ ОСТАЛЬНОЙ КОД БЕЗ ИЗМЕНЕНИЙ...
 
 # ===== ЗАГРУЗКА МОДЕЛЕЙ =====
 @st.cache_resource
