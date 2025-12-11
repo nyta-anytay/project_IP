@@ -193,33 +193,92 @@ def load_models_from_trained_models():
             except Exception as e:
                 st.sidebar.error(f"❌ Model2: {str(e)[:100]}")
         
-        # ===== МОДЕЛЬ 3 =====
+        # ===== МОДЕЛЬ 3: CNN =====
         if os.path.exists(MODEL3_PATH) and TF_AVAILABLE:
             try:
-                model3_keras = load_model(MODEL3_PATH, compile=False)
+                import h5py
                 
-                class CNNWrapper:
-                    def __init__(self, model):
-                        self.model = model
+                st.sidebar.info("Загрузка CNN модели...")
+                
+                # Вариант 1: Загрузка через weights_only
+                try:
+                    # Создаем архитектуру
+                    from tensorflow.keras.applications import MobileNetV2
+                    from tensorflow.keras import Sequential
+                    from tensorflow.keras.layers import (
+                        GlobalAveragePooling2D, Dense, 
+                        Dropout, Rescaling, Input,
+                        RandomFlip, RandomRotation, RandomZoom, RandomContrast
+                    )
                     
-                    def predict_proba(self, X):
-                        # CNN ожидает нормализованный вход [0, 1]
-                        if X.max() > 1.0:
-                            X = X / 255.0
-                        
-                        predictions = self.model.predict(X, verbose=0)
-                        
-                        if predictions.shape[-1] == 1:
-                            prob = predictions.flatten()
-                            return np.column_stack([1 - prob, prob])
-                        
-                        return predictions
+                    base_model = MobileNetV2(
+                        input_shape=(128, 128, 3),
+                        include_top=False,
+                        weights=None  # Без pretrained весов
+                    )
+                    base_model.trainable = False
+                    
+                    model3_keras = Sequential([
+                        Input(shape=(128, 128, 3)),
+                        Rescaling(1./255),
+                        RandomFlip("horizontal"),
+                        RandomRotation(0.1),
+                        RandomZoom(0.1),
+                        RandomContrast(0.1),
+                        base_model,
+                        GlobalAveragePooling2D(),
+                        Dropout(0.3),
+                        Dense(128, activation='relu'),
+                        Dropout(0.2),
+                        Dense(2, activation='softmax')
+                    ], name='MaskDetectionCNN')
+                    
+                    # Пытаемся загрузить веса
+                    try:
+                        model3_keras.load_weights(MODEL3_PATH)
+                        st.sidebar.success("✅ CNN с обученными весами")
+                        weights_loaded = True
+                    except Exception as e:
+                        st.sidebar.warning(f"⚠️ Не удалось загрузить веса: {str(e)[:80]}")
+                        # Загружаем pretrained веса ImageNet
+                        base_model_pretrained = MobileNetV2(
+                            input_shape=(128, 128, 3),
+                            include_top=False,
+                            weights='imagenet'
+                        )
+                        base_model.set_weights(base_model_pretrained.get_weights())
+                        st.sidebar.warning("⚠️ Используются веса ImageNet (неточно)")
+                        weights_loaded = False
+                    
+                except Exception as e1:
+                    st.sidebar.error(f"❌ Ошибка CNN: {str(e1)[:100]}")
+                    model3 = None
                 
-                model3 = CNNWrapper(model3_keras)
-                st.sidebar.success("✅ CNN загружена")
+                if model3_keras:
+                    # Обертка
+                    class CNNWrapper:
+                        def __init__(self, model, weights_loaded):
+                            self.model = model
+                            self.weights_loaded = weights_loaded
+                        
+                        def predict_proba(self, X):
+                            # CNN ожидает [0, 1]
+                            if X.max() > 1.0:
+                                X = X / 255.0
+                            
+                            predictions = self.model.predict(X, verbose=0)
+                            
+                            if predictions.shape[-1] == 1:
+                                prob = predictions.flatten()
+                                return np.column_stack([1 - prob, prob])
+                            
+                            return predictions
+                    
+                    model3 = CNNWrapper(model3_keras, weights_loaded)
                 
             except Exception as e:
-                st.sidebar.error(f"❌ Model3: {str(e)[:100]}")
+                st.sidebar.error(f"❌ Model3: {str(e)[:150]}")
+                model3 = None
         
         any_loaded = model1 is not None or model2 is not None or model3 is not None
         
