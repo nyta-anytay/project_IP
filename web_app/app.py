@@ -16,9 +16,27 @@ warnings.filterwarnings('ignore')
 try:
     import tensorflow as tf
     from tensorflow.keras.models import load_model
+    from tensorflow.keras import layers
     TF_AVAILABLE = True
+    
+    # ===== КАСТОМНЫЙ BATCHNORMALIZATION ДЛЯ СОВМЕСТИМОСТИ =====
+    class CompatibleBatchNormalization(layers.BatchNormalization):
+        """Исправляет проблему axis=[3] -> axis=3 для Keras 3"""
+        
+        def __init__(self, axis=-1, **kwargs):
+            if isinstance(axis, (list, tuple)):
+                axis = axis[0] if len(axis) == 1 else axis
+            super().__init__(axis=axis, **kwargs)
+        
+        @classmethod
+        def from_config(cls, config):
+            if 'axis' in config and isinstance(config['axis'], (list, tuple)):
+                config['axis'] = config['axis'][0] if len(config['axis']) == 1 else config['axis']
+            return super().from_config(config)
+    
 except ImportError:
     TF_AVAILABLE = False
+    CompatibleBatchNormalization = None
 
 # ===== СОЗДАЕМ ФЕЙКОВЫЕ МОДУЛИ ДЛЯ UNPICKLE =====
 import sys
@@ -222,12 +240,18 @@ def load_models_from_trained_models():
             else:
                 print("Пытаюсь загрузить CNN...")
                 
-                # Попытка 1: Стандартная загрузка
+                # Попытка 1: С кастомным BatchNormalization
                 try:
-                    print("Попытка 1: load_model с compile=False")
+                    print("Попытка 1: load_model с CompatibleBatchNormalization")
+                    
+                    custom_objects = {
+                        'BatchNormalization': CompatibleBatchNormalization,
+                    }
+                    
                     model3_keras = tf.keras.models.load_model(
                         MODEL3_PATH, 
-                        compile=False
+                        compile=False,
+                        custom_objects=custom_objects
                     )
                     print(f"✅ CNN загружена! Входной размер: {model3_keras.input_shape}")
                     
@@ -237,7 +261,6 @@ def load_models_from_trained_models():
                             self.model = model
                         
                         def predict_proba(self, X):
-                            # CNN ожидает нормализованный вход [0, 1]
                             if X.max() > 1.0:
                                 X = X / 255.0
                             
@@ -255,15 +278,13 @@ def load_models_from_trained_models():
                 except Exception as e1:
                     print(f"❌ Попытка 1 не удалась: {e1}")
                     
-                    # Попытка 2: С custom_objects
+                    # Попытка 2: Загрузка через TFSMLayer (для SavedModel)
                     try:
-                        print("Попытка 2: load_model с custom_objects")
-                        model3_keras = tf.keras.models.load_model(
-                            MODEL3_PATH,
-                            compile=False,
-                            custom_objects={}
-                        )
-                        print(f"✅ CNN загружена (попытка 2)")
+                        print("Попытка 2: Пробуем как SavedModel")
+                        
+                        # Проверяем, не является ли .h5 на самом деле директорией SavedModel
+                        model3_keras = tf.saved_model.load(MODEL3_PATH)
+                        print("✅ Загружено как SavedModel")
                         
                         class CNNWrapper:
                             def __init__(self, model):
@@ -272,21 +293,21 @@ def load_models_from_trained_models():
                             def predict_proba(self, X):
                                 if X.max() > 1.0:
                                     X = X / 255.0
-                                predictions = self.model.predict(X, verbose=0)
+                                X = tf.constant(X, dtype=tf.float32)
+                                predictions = self.model(X).numpy()
                                 if predictions.shape[-1] == 1:
                                     prob_positive = predictions.flatten()
                                     return np.column_stack([1 - prob_positive, prob_positive])
                                 return predictions
                         
                         model3 = CNNWrapper(model3_keras)
-                        print("✅ CNNWrapper создан (попытка 2)")
                         
                     except Exception as e2:
                         print(f"❌ Попытка 2 не удалась: {e2}")
                         
-                        # Попытка 3: Только веса
+                        # Попытка 3: Пересоздаём архитектуру
                         try:
-                            print("Попытка 3: Создаю архитектуру и загружаю веса")
+                            print("Попытка 3: Создаю архитектуру MobileNetV2 и загружаю веса")
                             
                             from tensorflow.keras.applications import MobileNetV2
                             from tensorflow.keras import Sequential
@@ -313,12 +334,12 @@ def load_models_from_trained_models():
                                 Dense(2, activation='softmax')
                             ])
                             
-                            # Пытаемся загрузить веса
                             try:
                                 model3_keras.load_weights(MODEL3_PATH)
                                 print("✅ Веса загружены")
-                            except:
-                                print("⚠️ Веса не загружены, используем pretrained")
+                            except Exception as we:
+                                print(f"⚠️ Веса не загружены: {we}")
+                                print("Используем pretrained ImageNet веса")
                             
                             class CNNWrapper:
                                 def __init__(self, model):
