@@ -221,49 +221,126 @@ def load_models_from_trained_models():
         
         model1, model2, model3 = None, None, None
         
-        # Модель 1
+        # ===== МОДЕЛЬ 1: HOG + SVM =====
         if os.path.exists(MODEL1_PATH):
             try:
                 with open(MODEL1_PATH, 'rb') as f:
                     model1 = pickle.load(f)
+                st.sidebar.success("✅ HOG + SVM")
             except Exception as e:
-                st.sidebar.error(f"❌ Model1: {str(e)[:100]}")
+                st.sidebar.error(f"❌ Model1: {str(e)[:80]}")
         
-        # Модель 2
+        # ===== МОДЕЛЬ 2: Haar + RF =====
         if os.path.exists(MODEL2_PATH):
             try:
                 with open(MODEL2_PATH, 'rb') as f:
                     model2 = pickle.load(f)
+                st.sidebar.success("✅ Haar + RF")
             except Exception as e:
-                st.sidebar.error(f"❌ Model2: {str(e)[:100]}")
+                st.sidebar.error(f"❌ Model2: {str(e)[:80]}")
         
-        # Модель 3
-        if os.path.exists(MODEL3_PATH) and TF_AVAILABLE:
-            try:
-                model3_keras = load_model(MODEL3_PATH, compile=False)
-                
-                class CNNWrapper:
-                    def __init__(self, model):
-                        self.model = model
+        # ===== МОДЕЛЬ 3: CNN =====
+        if os.path.exists(MODEL3_PATH):
+            if not TF_AVAILABLE:
+                st.sidebar.error("❌ CNN: TensorFlow не установлен")
+            else:
+                try:
+                    # Вариант 1: Простая загрузка
+                    try:
+                        model3_keras = tf.keras.models.load_model(
+                            MODEL3_PATH, 
+                            compile=False
+                        )
+                        st.sidebar.success("✅ CNN (простая загрузка)")
+                        
+                    except Exception as e1:
+                        st.sidebar.info("🔄 Пробую safe mode для CNN...")
+                        
+                        # Вариант 2: Safe mode
+                        try:
+                            model3_keras = tf.keras.models.load_model(
+                                MODEL3_PATH,
+                                compile=False,
+                                safe_mode=False
+                            )
+                            st.sidebar.success("✅ CNN (safe mode)")
+                            
+                        except Exception as e2:
+                            st.sidebar.info("🔄 Создаю архитектуру с нуля...")
+                            
+                            # Вариант 3: Создаем архитектуру заново
+                            from tensorflow.keras.applications import MobileNetV2
+                            from tensorflow.keras import Sequential
+                            from tensorflow.keras.layers import (
+                                GlobalAveragePooling2D, Dense, 
+                                Dropout, Rescaling, Input
+                            )
+                            
+                            base_model = MobileNetV2(
+                                input_shape=(128, 128, 3),
+                                include_top=False,
+                                weights='imagenet'
+                            )
+                            base_model.trainable = False
+                            
+                            model3_keras = Sequential([
+                                Input(shape=(128, 128, 3)),
+                                Rescaling(1./255),
+                                base_model,
+                                GlobalAveragePooling2D(),
+                                Dropout(0.3),
+                                Dense(128, activation='relu'),
+                                Dropout(0.2),
+                                Dense(2, activation='softmax')
+                            ])
+                            
+                            # Пытаемся загрузить веса
+                            try:
+                                model3_keras.load_weights(MODEL3_PATH)
+                                st.sidebar.success("✅ CNN (только веса)")
+                            except Exception as e3:
+                                st.sidebar.warning("⚠️ CNN: используем pretrained MobileNet без весов")
                     
-                    def predict_proba(self, X):
-                        if X.max() > 1.0:
-                            X = X / 255.0
-                        predictions = self.model.predict(X, verbose=0)
-                        if predictions.shape[-1] == 1:
-                            prob = predictions.flatten()
-                            return np.column_stack([1 - prob, prob])
-                        return predictions
-                
-                model3 = CNNWrapper(model3_keras)
-            except Exception as e:
-                st.sidebar.error(f"❌ Model3: {str(e)[:100]}")
+                    # Обертка для единообразного интерфейса
+                    class CNNWrapper:
+                        def __init__(self, model):
+                            self.model = model
+                        
+                        def predict_proba(self, X):
+                            # Убеждаемся что X нормализован
+                            if X.max() > 1.0:
+                                X = X / 255.0
+                            
+                            predictions = self.model.predict(X, verbose=0)
+                            
+                            # Если бинарная классификация
+                            if predictions.shape[-1] == 1:
+                                prob_positive = predictions.flatten()
+                                return np.column_stack([1 - prob_positive, prob_positive])
+                            
+                            return predictions
+                    
+                    model3 = CNNWrapper(model3_keras)
+                    
+                except Exception as e:
+                    st.sidebar.error(f"❌ CNN: {str(e)[:150]}")
+                    # Показываем полную ошибку в expander
+                    with st.sidebar.expander("🔍 Детали ошибки CNN"):
+                        st.code(str(e))
+        else:
+            st.sidebar.warning(f"⚠️ CNN: файл не найден")
         
+        # Проверяем что хоть что-то загружено
         any_loaded = model1 is not None or model2 is not None or model3 is not None
-        return model1, model2, model3, labels_map, any_loaded, ""
         
+        error_msg = ""
+        if not any_loaded:
+            error_msg = "Ни одна модель не загружена. Проверьте файлы в trained_models/"
+        
+        return model1, model2, model3, labels_map, any_loaded, error_msg
+    
     except Exception as e:
-        return None, None, None, {}, False, str(e)
+        return None, None, None, {}, False, f"Критическая ошибка: {str(e)}"
 
 model1, model2, model3, labels_map, models_loaded, error_msg = load_models_from_trained_models()
 
@@ -469,12 +546,9 @@ with col2:
                             
                             with col_a:
                                 if confidence >= confidence_threshold:
-                                    if prediction in ["WithMask", "С маской"]:
-                                        st.success(f"✅ **{prediction}**")
-                                    else:
-                                        st.error(f"❌ **{prediction}**")
+                                 st.markdown(f"**{prediction}**")
                                 else:
-                                    st.warning(f"⚠️ **{prediction}** (низкая уверенность)")
+                                    st.markdown(f"**{prediction}** (низкая уверенность)")
                             
                             with col_b:
                                 st.metric("Уверенность", f"{confidence:.1%}")
@@ -516,14 +590,14 @@ with col2:
                             prediction = labels_map.get(pred_class, "С маской" if pred_class == 1 else "Без маски")
                             
                             st.markdown(f"## {icon} {prediction}")
-                            
+
                             if confidence >= confidence_threshold:
                                 if prediction in ["WithMask", "С маской"]:
-                                    st.success("✅ Маска обнаружена!")
+                                      st.info("Маска обнаружена")
                                 else:
-                                    st.error("❌ Маска не обнаружена!")
+                                 st.info("Маска не обнаружена")
                             else:
-                                st.warning("⚠️ Низкая уверенность в предсказании")
+                                st.info("Низкая уверенность в предсказании")
                             
                             col_a, col_b, col_c = st.columns(3)
                             
