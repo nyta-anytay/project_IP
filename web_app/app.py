@@ -15,9 +15,9 @@ warnings.filterwarnings('ignore')
 
 # ===== ВАЖНО: ДЛЯ STREAMLIT CLOUD УБИРАЕМ ПУТИ ИЗ КОНФИГА =====
 # Вместо импорта из config, задаем пути напрямую
-MODEL1_PATH = 'model_hog_svm.pkl'  # или другое имя вашего первого .pkl файла
-MODEL2_PATH = 'model2_haar_rf.pkl'  # или другое имя вашего второго .pkl файла
-MODEL3_PATH = 'model3_cnn.h5'   # имя вашего .h5 файла
+MODEL1_PATH = 'web_app/model_hog_svm.pkl'  # или другое имя вашего первого .pkl файла
+MODEL2_PATH = 'web_app/model2_haar_rf.pkl'  # или другое имя вашего второго .pkl файла
+MODEL3_PATH = 'web_app/model3_cnn.h5'   # имя вашего .h5 файла
 LABELS_MAP_PATH = 'labels_map.json'  # если есть, или задаем вручную
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
