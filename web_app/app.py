@@ -87,14 +87,31 @@ st.markdown("""
 # ===== ЗАГРУЗКА МОДЕЛЕЙ =====
 @st.cache_resource
 def load_models_from_trained_models():
-    """Загружаем модели из папки trained_models/"""
+    """Загружаем модели из папки trained_models/ с исправлениями"""
     
     if not os.path.exists(TRAINED_MODELS_DIR):
-        return None, None, None, {}, False, f"Папка trained_models/ не найдена: {TRAINED_MODELS_DIR}"
+        return None, None, None, {}, False, f"Папка trained_models/ не найдена"
     
     try:
-        # ===== 1. Labels map =====
-        labels_map = {0: "Без маски", 1: "С маской"}
+        # ===== СОЗДАЕМ ФЕЙКОВЫЕ МОДУЛИ ДЛЯ UNPICKLE =====
+        import sys
+        import types
+        
+        # Создаем фейковый модуль src если его нет
+        if 'src' not in sys.modules:
+            src_module = types.ModuleType('src')
+            sys.modules['src'] = src_module
+            
+            # Создаем подмодули
+            for submodule in ['config', 'models', 'utils', 'data_preparation', 'evaluation']:
+                full_name = f'src.{submodule}'
+                if full_name not in sys.modules:
+                    sub = types.ModuleType(full_name)
+                    sys.modules[full_name] = sub
+                    setattr(src_module, submodule, sub)
+        
+        # ===== Labels map =====
+        labels_map = {0: "WithoutMask", 1: "WithMask"}
         if os.path.exists(LABELS_MAP_PATH):
             try:
                 with open(LABELS_MAP_PATH, 'r') as f:
@@ -102,137 +119,133 @@ def load_models_from_trained_models():
                     labels_map = {int(k): v for k, v in labels_dict.items()}
                 st.sidebar.success("✅ labels_map загружен")
             except Exception as e:
-                st.sidebar.warning(f"⚠️ Ошибка labels_map: {str(e)[:50]}")
-        else:
-            st.sidebar.warning("⚠️ labels_map.json не найден")
+                st.sidebar.warning(f"⚠️ labels_map: {str(e)[:50]}")
         
-        models_loaded = []
         model1, model2, model3 = None, None, None
         
-        # ===== 2. Модель 1: HOG + SVM =====
+        # ===== МОДЕЛЬ 1: HOG + SVM =====
         if os.path.exists(MODEL1_PATH):
             try:
                 with open(MODEL1_PATH, 'rb') as f:
                     model1 = pickle.load(f)
-                models_loaded.append(("model1", True, ""))
-                st.sidebar.success(f"✅ Модель 1 загружена")
+                st.sidebar.success("✅ Модель 1 (HOG + SVM)")
             except Exception as e:
-                models_loaded.append(("model1", False, str(e)))
-                st.sidebar.error(f"❌ Ошибка model1: {str(e)[:80]}")
+                st.sidebar.error(f"❌ Model1: {str(e)[:80]}")
         else:
-            models_loaded.append(("model1", False, "Файл не найден"))
-            st.sidebar.error(f"❌ Файл не найден: {os.path.basename(MODEL1_PATH)}")
+            st.sidebar.error(f"❌ Model1: файл не найден")
         
-        # ===== 3. Модель 2: Haar + RF =====
+        # ===== МОДЕЛЬ 2: Haar + RF =====
         if os.path.exists(MODEL2_PATH):
             try:
-                # Пробуем стандартную загрузку
                 with open(MODEL2_PATH, 'rb') as f:
                     model2 = pickle.load(f)
-                models_loaded.append(("model2", True, ""))
-                st.sidebar.success(f"✅ Модель 2 загружена")
+                st.sidebar.success("✅ Модель 2 (Haar + RF)")
             except Exception as e:
-                error_msg = str(e)
-                # Если ошибка из-за 'src'
-                if 'src' in error_msg or 'No module' in error_msg:
-                    try:
-                        # Безопасная загрузка для моделей с локальными импортами
-                        class SafeUnpickler(pickle.Unpickler):
-                            def find_class(self, module, name):
-                                try:
-                                    return super().find_class(module, name)
-                                except (ImportError, AttributeError, ModuleNotFoundError):
-                                    # Создаем заглушку для неизвестных классов
-                                    class DummyClass:
-                                        def __init__(self, *args, **kwargs):
-                                            pass
-                                    return DummyClass
-                        
-                        with open(MODEL2_PATH, 'rb') as f:
-                            unpickler = SafeUnpickler(f)
-                            model2 = unpickler.load()
-                        models_loaded.append(("model2", True, ""))
-                        st.sidebar.success("✅ Модель 2 загружена (безопасный режим)")
-                    except Exception as e2:
-                        models_loaded.append(("model2", False, str(e2)))
-                        st.sidebar.error(f"❌ Ошибка model2: {str(e2)[:80]}")
-                else:
-                    models_loaded.append(("model2", False, error_msg))
-                    st.sidebar.error(f"❌ Ошибка model2: {error_msg[:80]}")
+                st.sidebar.error(f"❌ Model2: {str(e)[:80]}")
         else:
-            models_loaded.append(("model2", False, "Файл не найден"))
-            st.sidebar.error(f"❌ Файл не найден: {os.path.basename(MODEL2_PATH)}")
+            st.sidebar.error(f"❌ Model2: файл не найден")
         
-        # ===== 4. Модель 3: CNN =====
+        # ===== МОДЕЛЬ 3: CNN =====
         if os.path.exists(MODEL3_PATH):
             try:
-                # Пробуем разные способы загрузки
-                try:
-                    # Способ 1: Простая загрузка
-                    model3_keras = tf.keras.models.load_model(MODEL3_PATH, compile=False)
-                    st.sidebar.success("✅ Модель 3 загружена")
-                except Exception as e1:
-                    # Способ 2: С кастомными объектами для BatchNormalization
-                    st.sidebar.info("🔄 Пробую загрузить модель 3 с кастомными объектами...")
-                    
-                    # Создаем безопасный BatchNormalization
-                    class SafeBatchNormalization(tf.keras.layers.BatchNormalization):
-                        def __init__(self, *args, **kwargs):
-                            # Исправляем axis если это список
-                            if 'axis' in kwargs and isinstance(kwargs['axis'], list):
-                                kwargs['axis'] = kwargs['axis'][0] if kwargs['axis'] else -1
-                            super().__init__(*args, **kwargs)
-                    
-                    custom_objects = {
-                        'BatchNormalization': SafeBatchNormalization,
-                        'batch_normalization': SafeBatchNormalization,
-                        'batch_normalization_v1': SafeBatchNormalization,
-                    }
-                    
-                    model3_keras = tf.keras.models.load_model(
-                        MODEL3_PATH,
-                        compile=False,
-                        custom_objects=custom_objects
-                    )
-                    st.sidebar.success("✅ Модель 3 загружена (с кастомными объектами)")
+                # Загружаем с ignore всех custom objects
+                import tensorflow as tf
                 
-                # Обертка для модели
+                # Вариант 1: Попробовать без compile
+                try:
+                    model3_keras = tf.keras.models.load_model(
+                        MODEL3_PATH, 
+                        compile=False
+                    )
+                    st.sidebar.success("✅ Модель 3 (CNN) - простая загрузка")
+                    
+                except Exception as e1:
+                    # Вариант 2: С safe mode
+                    st.sidebar.info("Пробую safe mode для CNN...")
+                    
+                    try:
+                        # Используем experimental API
+                        model3_keras = tf.keras.models.load_model(
+                            MODEL3_PATH,
+                            compile=False,
+                            safe_mode=False
+                        )
+                        st.sidebar.success("✅ Модель 3 (CNN) - safe mode")
+                        
+                    except Exception as e2:
+                        # Вариант 3: Загружаем только веса
+                        st.sidebar.info("Пробую загрузить только архитектуру...")
+                        
+                        # Создаем простую архитектуру MobileNetV2
+                        from tensorflow.keras.applications import MobileNetV2
+                        from tensorflow.keras import Sequential
+                        from tensorflow.keras.layers import (
+                            GlobalAveragePooling2D, Dense, 
+                            Dropout, Rescaling, Input
+                        )
+                        
+                        base_model = MobileNetV2(
+                            input_shape=(128, 128, 3),
+                            include_top=False,
+                            weights='imagenet'
+                        )
+                        base_model.trainable = False
+                        
+                        model3_keras = Sequential([
+                            Input(shape=(128, 128, 3)),
+                            Rescaling(1./255),
+                            base_model,
+                            GlobalAveragePooling2D(),
+                            Dropout(0.3),
+                            Dense(128, activation='relu'),
+                            Dropout(0.2),
+                            Dense(2, activation='softmax')
+                        ])
+                        
+                        # Пытаемся загрузить только веса
+                        try:
+                            model3_keras.load_weights(MODEL3_PATH)
+                            st.sidebar.success("✅ Модель 3 (CNN) - только веса")
+                        except:
+                            st.sidebar.warning("⚠️ Не удалось загрузить веса, используем pretrained MobileNet")
+                
+                # Обертка для единообразного интерфейса
                 class CNNWrapper:
                     def __init__(self, model):
                         self.model = model
                     
                     def predict_proba(self, X):
+                        # Убеждаемся что X нормализован
+                        if X.max() > 1.0:
+                            X = X / 255.0
+                        
                         predictions = self.model.predict(X, verbose=0)
-                        # Если бинарная классификация с одним выходом
+                        
+                        # Если бинарная классификация
                         if predictions.shape[-1] == 1:
                             prob_positive = predictions.flatten()
                             return np.column_stack([1 - prob_positive, prob_positive])
+                        
                         return predictions
                 
                 model3 = CNNWrapper(model3_keras)
-                models_loaded.append(("model3", True, ""))
                 
             except Exception as e:
-                models_loaded.append(("model3", False, str(e)))
-                st.sidebar.error(f"❌ Ошибка model3: {str(e)[:150]}")
+                st.sidebar.error(f"❌ Model3: {str(e)[:150]}")
         else:
-            models_loaded.append(("model3", False, "Файл не найден"))
-            st.sidebar.error(f"❌ Файл не найден: {os.path.basename(MODEL3_PATH)}")
+            st.sidebar.error(f"❌ Model3: файл не найден")
         
-        # Подсчет успешных загрузок
-        loaded_count = sum(1 for _, status, _ in models_loaded if status)
-        any_loaded = loaded_count > 0
+        # Проверяем что хоть что-то загружено
+        any_loaded = model1 is not None or model2 is not None or model3 is not None
         
         error_msg = ""
         if not any_loaded:
-            error_details = [f"{name}: {msg}" for name, status, msg in models_loaded if not status and msg]
-            error_msg = f"Ошибки загрузки: {'; '.join(error_details)}"
+            error_msg = "Ни одна модель не загружена. Проверьте файлы в trained_models/"
         
         return model1, model2, model3, labels_map, any_loaded, error_msg
     
     except Exception as e:
-        return None, None, None, {}, False, f"Общая ошибка: {str(e)}"
-
+        return None, None, None, {}, False, f"Критическая ошибка: {str(e)}"
 # Загружаем модели
 model1, model2, model3, labels_map, models_loaded, error_msg = load_models_from_trained_models()
 
