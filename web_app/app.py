@@ -19,22 +19,27 @@ try:
     from tensorflow.keras import layers
     TF_AVAILABLE = True
     
-    # ===== КАСТОМНЫЙ BATCHNORMALIZATION ДЛЯ СОВМЕСТИМОСТИ =====
+    # ===== КАСТОМНЫЙ BATCHNORMALIZATION ДЛЯ СОВМЕСТИМОСТИ С KERAS 3 =====
     class CompatibleBatchNormalization(layers.BatchNormalization):
         """Исправляет проблему axis=[3] -> axis=3 для Keras 3"""
         
         def __init__(self, axis=-1, **kwargs):
+            # Преобразуем список в целое число
             if isinstance(axis, (list, tuple)):
                 axis = axis[0] if len(axis) == 1 else axis
             super().__init__(axis=axis, **kwargs)
         
         @classmethod
         def from_config(cls, config):
+            # Также обрабатываем при десериализации
             if 'axis' in config and isinstance(config['axis'], (list, tuple)):
                 config['axis'] = config['axis'][0] if len(config['axis']) == 1 else config['axis']
             return super().from_config(config)
     
-except ImportError:
+    print("✅ TensorFlow загружен, CompatibleBatchNormalization создан")
+    
+except ImportError as e:
+    print(f"❌ TensorFlow не установлен: {e}")
     TF_AVAILABLE = False
     CompatibleBatchNormalization = None
 
@@ -222,27 +227,29 @@ def load_models_from_trained_models():
             try:
                 with open(MODEL1_PATH, 'rb') as f:
                     model1 = pickle.load(f)
+                print("✅ Model1 (HOG+SVM) загружена")
             except Exception as e:
-                print(f"Ошибка загрузки Model1: {e}")
+                print(f"❌ Ошибка загрузки Model1: {e}")
         
         # ===== МОДЕЛЬ 2 =====
         if os.path.exists(MODEL2_PATH):
             try:
                 with open(MODEL2_PATH, 'rb') as f:
                     model2 = pickle.load(f)
+                print("✅ Model2 (Haar+RF) загружена")
             except Exception as e:
-                print(f"Ошибка загрузки Model2: {e}")
+                print(f"❌ Ошибка загрузки Model2: {e}")
         
-        # ===== МОДЕЛЬ 3: CNN (С НЕСКОЛЬКИМИ ПОПЫТКАМИ) =====
+        # ===== МОДЕЛЬ 3: CNN =====
         if os.path.exists(MODEL3_PATH):
             if not TF_AVAILABLE:
-                print("TensorFlow не установлен!")
+                print("❌ TensorFlow не установлен!")
             else:
-                print("Пытаюсь загрузить CNN...")
+                print("🔄 Пытаюсь загрузить CNN...")
                 
-                # Попытка 1: С кастомным BatchNormalization
+                # === ПОПЫТКА 1: С CompatibleBatchNormalization ===
                 try:
-                    print("Попытка 1: load_model с CompatibleBatchNormalization")
+                    print("   Попытка 1: load_model с CompatibleBatchNormalization")
                     
                     custom_objects = {
                         'BatchNormalization': CompatibleBatchNormalization,
@@ -253,9 +260,8 @@ def load_models_from_trained_models():
                         compile=False,
                         custom_objects=custom_objects
                     )
-                    print(f"✅ CNN загружена! Входной размер: {model3_keras.input_shape}")
+                    print(f"   ✅ CNN загружена! Входной размер: {model3_keras.input_shape}")
                     
-                    # Обертка
                     class CNNWrapper:
                         def __init__(self, model):
                             self.model = model
@@ -263,28 +269,52 @@ def load_models_from_trained_models():
                         def predict_proba(self, X):
                             if X.max() > 1.0:
                                 X = X / 255.0
-                            
                             predictions = self.model.predict(X, verbose=0)
-                            
                             if predictions.shape[-1] == 1:
                                 prob_positive = predictions.flatten()
                                 return np.column_stack([1 - prob_positive, prob_positive])
-                            
                             return predictions
                     
                     model3 = CNNWrapper(model3_keras)
-                    print("✅ CNNWrapper создан")
+                    print("   ✅ CNNWrapper создан")
                     
                 except Exception as e1:
-                    print(f"❌ Попытка 1 не удалась: {e1}")
+                    print(f"   ❌ Попытка 1 не удалась: {e1}")
                     
-                    # Попытка 2: Загрузка через TFSMLayer (для SavedModel)
+                    # === ПОПЫТКА 2: Исправление H5 файла напрямую ===
                     try:
-                        print("Попытка 2: Пробуем как SavedModel")
+                        print("   Попытка 2: Исправляю H5 файл и загружаю")
                         
-                        # Проверяем, не является ли .h5 на самом деле директорией SavedModel
-                        model3_keras = tf.saved_model.load(MODEL3_PATH)
-                        print("✅ Загружено как SavedModel")
+                        import h5py
+                        import tempfile
+                        import shutil
+                        
+                        # Создаём временный исправленный файл
+                        with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as tmp:
+                            tmp_path = tmp.name
+                        
+                        shutil.copy(MODEL3_PATH, tmp_path)
+                        
+                        # Исправляем конфигурацию в H5 файле
+                        with h5py.File(tmp_path, 'r+') as f:
+                            if 'model_config' in f.attrs:
+                                config_json = f.attrs['model_config']
+                                if isinstance(config_json, bytes):
+                                    config_json = config_json.decode('utf-8')
+                                
+                                # Заменяем [3] на 3 и [-1] на -1
+                                import re
+                                config_json = re.sub(r'"axis":\s*\[(\-?\d+)\]', r'"axis": \1', config_json)
+                                
+                                f.attrs['model_config'] = config_json
+                                print("   ✅ Конфигурация исправлена")
+                        
+                        # Загружаем исправленную модель
+                        model3_keras = tf.keras.models.load_model(tmp_path, compile=False)
+                        print(f"   ✅ CNN загружена из исправленного файла!")
+                        
+                        # Удаляем временный файл
+                        os.unlink(tmp_path)
                         
                         class CNNWrapper:
                             def __init__(self, model):
@@ -293,27 +323,27 @@ def load_models_from_trained_models():
                             def predict_proba(self, X):
                                 if X.max() > 1.0:
                                     X = X / 255.0
-                                X = tf.constant(X, dtype=tf.float32)
-                                predictions = self.model(X).numpy()
+                                predictions = self.model.predict(X, verbose=0)
                                 if predictions.shape[-1] == 1:
                                     prob_positive = predictions.flatten()
                                     return np.column_stack([1 - prob_positive, prob_positive])
                                 return predictions
                         
                         model3 = CNNWrapper(model3_keras)
+                        print("   ✅ CNNWrapper создан (попытка 2)")
                         
                     except Exception as e2:
-                        print(f"❌ Попытка 2 не удалась: {e2}")
+                        print(f"   ❌ Попытка 2 не удалась: {e2}")
                         
-                        # Попытка 3: Пересоздаём архитектуру
+                        # === ПОПЫТКА 3: Пересоздаём архитектуру ===
                         try:
-                            print("Попытка 3: Создаю архитектуру MobileNetV2 и загружаю веса")
+                            print("   Попытка 3: Создаю архитектуру MobileNetV2")
                             
                             from tensorflow.keras.applications import MobileNetV2
                             from tensorflow.keras import Sequential
                             from tensorflow.keras.layers import (
                                 GlobalAveragePooling2D, Dense, 
-                                Dropout, Rescaling, Input
+                                Dropout, Input
                             )
                             
                             base_model = MobileNetV2(
@@ -325,7 +355,6 @@ def load_models_from_trained_models():
                             
                             model3_keras = Sequential([
                                 Input(shape=(128, 128, 3)),
-                                Rescaling(1./255),
                                 base_model,
                                 GlobalAveragePooling2D(),
                                 Dropout(0.3),
@@ -334,20 +363,18 @@ def load_models_from_trained_models():
                                 Dense(2, activation='softmax')
                             ])
                             
-                            try:
-                                model3_keras.load_weights(MODEL3_PATH)
-                                print("✅ Веса загружены")
-                            except Exception as we:
-                                print(f"⚠️ Веса не загружены: {we}")
-                                print("Используем pretrained ImageNet веса")
+                            print("   ⚠️ Используем pretrained ImageNet веса (без дообучения)")
                             
                             class CNNWrapper:
                                 def __init__(self, model):
                                     self.model = model
                                 
                                 def predict_proba(self, X):
+                                    # Нормализация для MobileNetV2
                                     if X.max() > 1.0:
                                         X = X / 255.0
+                                    # MobileNetV2 ожидает [-1, 1]
+                                    X = (X - 0.5) * 2
                                     predictions = self.model.predict(X, verbose=0)
                                     if predictions.shape[-1] == 1:
                                         prob_positive = predictions.flatten()
@@ -355,19 +382,21 @@ def load_models_from_trained_models():
                                     return predictions
                             
                             model3 = CNNWrapper(model3_keras)
-                            print("✅ CNNWrapper создан (попытка 3)")
+                            print("   ✅ CNNWrapper создан (попытка 3 - pretrained)")
                             
                         except Exception as e3:
-                            print(f"❌ Попытка 3 не удалась: {e3}")
+                            print(f"   ❌ Попытка 3 не удалась: {e3}")
                             model3 = None
         else:
-            print(f"Файл модели не найден: {MODEL3_PATH}")
+            print(f"❌ Файл модели не найден: {MODEL3_PATH}")
         
         # Выводим итоговый статус
-        print(f"\nИтоговый статус:")
-        print(f"Model1: {'✅' if model1 else '❌'}")
-        print(f"Model2: {'✅' if model2 else '❌'}")
-        print(f"Model3: {'✅' if model3 else '❌'}")
+        print(f"\n{'='*50}")
+        print(f"Итоговый статус загрузки моделей:")
+        print(f"  Model1 (HOG+SVM):  {'✅ Загружена' if model1 else '❌ Не загружена'}")
+        print(f"  Model2 (Haar+RF):  {'✅ Загружена' if model2 else '❌ Не загружена'}")
+        print(f"  Model3 (CNN):      {'✅ Загружена' if model3 else '❌ Не загружена'}")
+        print(f"{'='*50}\n")
         
         any_loaded = model1 is not None or model2 is not None or model3 is not None
         error_msg = "" if any_loaded else "Не удалось загрузить модели"
@@ -375,10 +404,12 @@ def load_models_from_trained_models():
         return model1, model2, model3, labels_map, any_loaded, error_msg
     
     except Exception as e:
-        print(f"Критическая ошибка загрузки: {e}")
+        print(f"❌ Критическая ошибка загрузки: {e}")
+        import traceback
+        traceback.print_exc()
         return None, None, None, {}, False, str(e)
 
-# Загружаем модели БЕЗ вывода сообщений
+# Загружаем модели
 model1, model2, model3, labels_map, models_loaded, error_msg = load_models_from_trained_models()
 
 # ===== ЗАГОЛОВОК =====
@@ -386,7 +417,7 @@ st.markdown('<h1 class="main-header">😷 Система детекции мас
            unsafe_allow_html=True)
 st.markdown("---")
 
-# ===== SIDEBAR (УПРОЩЕННЫЙ) =====
+# ===== SIDEBAR =====
 with st.sidebar:
     st.header("⚙️ Панель управления")
     
@@ -421,7 +452,7 @@ with st.sidebar:
     
     st.markdown("---")
     
-    # Информация о моделях (КРАТКАЯ)
+    # Информация о моделях
     with st.expander("📖 О моделях"):
         st.markdown("""
         **🔵 HOG + SVM**  
@@ -512,12 +543,8 @@ with col2:
                             col_a, col_b = st.columns([2, 1])
                             
                             with col_a:
-                                # БЕЗ ЭМОДЗИ И ВОСКЛИЦАТЕЛЬНЫХ ЗНАКОВ
                                 if confidence >= confidence_threshold:
-                                    if prediction in ["WithMask", "С маской"]:
-                                        st.markdown(f"**{prediction}**")
-                                    else:
-                                        st.markdown(f"**{prediction}**")
+                                    st.markdown(f"**{prediction}**")
                                 else:
                                     st.markdown(f"**{prediction}** (низкая уверенность)")
                             
@@ -560,7 +587,6 @@ with col2:
                             confidence = pred_proba[pred_class] if len(pred_proba) > pred_class else pred_proba[1]
                             prediction = labels_map.get(pred_class, "С маской" if pred_class == 1 else "Без маски")
                             
-                            # БЕЗ ЭМОДЗИ
                             st.markdown(f"## {prediction}")
                             
                             col_a, col_b, col_c = st.columns(3)
@@ -618,7 +644,6 @@ with col2:
         - Используйте четкие фотографии
         - Лицо должно быть хорошо видно
         - Избегайте сильных теней
-        - Оптимальное расстояние: портретная съемка
         """)
 
 # ===== FOOTER =====
@@ -634,9 +659,6 @@ with st.expander("О системе"):
     2. **Глубокое обучение** - CNN с Transfer Learning
     
     **Технологии:** Python, OpenCV, scikit-learn, TensorFlow, Streamlit
-    
-    ---
-    Разработано в рамках курсового проекта | 2024
     """)
 
 st.markdown("""
