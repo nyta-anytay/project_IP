@@ -11,8 +11,7 @@ import os
 import warnings
 import pandas as pd
 warnings.filterwarnings('ignore')
-import tensorflow as tf
-print(f"🔍 TensorFlow версия на сервере: {tf.__version__}")
+
 
 # ===== ИМПОРТЫ ДЛЯ TENSORFLOW =====
 try:
