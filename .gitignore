@@ -27,10 +27,10 @@ ENV/
 
 # Данные и модели
 data/
-Trained_models/*.pkl
-Trained_models/*.h5
-Trained_models/*.keras
-*.npz
+#Trained_models/*.pkl
+#Trained_models/*.h5
+#Trained_models/*.keras
+#*.npz
 best_model.h5
 
 # Результаты
