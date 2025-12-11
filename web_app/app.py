@@ -106,25 +106,32 @@ class HaarCascade_RF_Model:
         self.name = "Haar Cascade + RF"
         self.cascade_path = None
 
+    # ---------------------------------------------------------
+    # ФИКС для всех моделей RandomForest старых версий sklearn
+    # ---------------------------------------------------------
     def _patch_missing_tree_attrs(self):
-        """Патчим отсутствующие атрибуты у деревьев RandomForest."""
         try:
             estimators = getattr(self.model, "estimators_", None)
             if estimators is None:
                 return
 
             for est in estimators:
+                # добавляем поле, если его не было
                 if not hasattr(est, "monotonic_cst"):
                     setattr(est, "monotonic_cst", None)
 
                 tree_obj = getattr(est, "tree_", None)
                 if tree_obj is not None and not hasattr(tree_obj, "monotonic_cst"):
                     setattr(tree_obj, "monotonic_cst", None)
+
         except Exception:
             pass
 
+    # ---------------------------------------------------------
+    # ОСНОВНОЙ МЕТОД PREDCIT
+    # ---------------------------------------------------------
     def predict_proba(self, X):
-        # Загружаем Haar Cascade если еще нет
+        # загружаем каскад
         if self.face_cascade is None:
             try:
                 self.face_cascade = cv2.CascadeClassifier(
@@ -135,22 +142,24 @@ class HaarCascade_RF_Model:
 
         features = []
 
+        # ---------------------------------------------------------
+        # Извлекаем признаки
+        # ---------------------------------------------------------
         for img in X:
-            # Денормализация
             if img.max() <= 1.0:
                 img = (img * 255).astype(np.uint8)
 
             gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
             feat = []
 
-            # 1. Статистики
+            # базовые статистики
             feat.extend([gray.mean(), gray.std(), gray.min(), gray.max()])
 
-            # 2. Гистограмма
+            # гистограмма
             hist = cv2.calcHist([gray], [0], None, [32], [0, 256])
             feat.extend(hist.flatten())
 
-            # 3. Количество лиц
+            # количество лиц
             if self.face_cascade is not None:
                 try:
                     faces = self.face_cascade.detectMultiScale(
@@ -162,14 +171,14 @@ class HaarCascade_RF_Model:
             else:
                 feat.append(0)
 
-            # 4. Цветовые статистики
+            # цвет в каждом канале
             for channel in range(3):
                 feat.extend([
                     img[:, :, channel].mean(),
                     img[:, :, channel].std()
                 ])
 
-            # 5. Края
+            # края
             edges = cv2.Canny(gray, 100, 200)
             feat.extend([edges.mean(), edges.std()])
 
@@ -177,15 +186,39 @@ class HaarCascade_RF_Model:
 
         X_features = np.array(features)
 
-        # ========== FIX ERROR HERE ==========
+        # ---------------------------------------------------------
+        # Пытаемся вызвать predict_proba
+        # ---------------------------------------------------------
         try:
-            return self.model.predict_proba(X_features)
+            proba = self.model.predict_proba(X_features)
 
         except AttributeError as e:
-            if "monotonic_cst" in str(e) or "monotonic" in str(e):
+            if "monotonic_cst" in str(e):
                 self._patch_missing_tree_attrs()
-                return self.model.predict_proba(X_features)
-            raise e
+                proba = self.model.predict_proba(X_features)
+            else:
+                raise e
+
+        # ---------------------------------------------------------
+        # НОРМАЛИЗАЦИЯ ВЕРОЯТНОСТЕЙ (фикс мусора вроде 34617%)
+        # ---------------------------------------------------------
+        proba = np.array(proba, dtype=float)
+
+        # убираем отрицательные значения
+        proba = np.clip(proba, 0, None)
+
+        # если сумма > 1 → нормализуем
+        sums = proba.sum(axis=1, keepdims=True)
+        sums[sums == 0] = 1  # защита
+        proba = proba / sums
+
+        # если всё равно есть NaN → softmax
+        if not np.all(np.isfinite(proba)):
+            expv = np.exp(proba - np.max(proba, axis=1, keepdims=True))
+            proba = expv / expv.sum(axis=1, keepdims=True)
+
+        return proba
+
 
 
 # Добавляем классы в фейковый модуль
