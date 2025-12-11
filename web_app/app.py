@@ -10,8 +10,18 @@ import json
 import os
 import warnings
 import pandas as pd
+import sys
+import logging
+
 warnings.filterwarnings('ignore')
 
+# ===== НАСТРОЙКА ЛОГИРОВАНИЯ =====
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    stream=sys.stdout
+)
+logger = logging.getLogger(__name__)
 
 # ===== ИМПОРТЫ ДЛЯ TENSORFLOW =====
 try:
@@ -19,33 +29,15 @@ try:
     from tensorflow.keras.models import load_model
     from tensorflow.keras import layers
     TF_AVAILABLE = True
-    
-    # ===== КАСТОМНЫЙ BATCHNORMALIZATION ДЛЯ СОВМЕСТИМОСТИ С KERAS 3 =====
-    class CompatibleBatchNormalization(layers.BatchNormalization):
-        """Исправляет проблему axis=[3] -> axis=3 для Keras 3"""
-        
-        def __init__(self, axis=-1, **kwargs):
-            # Преобразуем список в целое число
-            if isinstance(axis, (list, tuple)):
-                axis = axis[0] if len(axis) == 1 else axis
-            super().__init__(axis=axis, **kwargs)
-        
-        @classmethod
-        def from_config(cls, config):
-            # Также обрабатываем при десериализации
-            if 'axis' in config and isinstance(config['axis'], (list, tuple)):
-                config['axis'] = config['axis'][0] if len(config['axis']) == 1 else config['axis']
-            return super().from_config(config)
-    
-    print("✅ TensorFlow загружен, CompatibleBatchNormalization создан")
+    TF_VERSION = tf.__version__
+    logger.info(f"✅ TensorFlow {TF_VERSION} загружен")
     
 except ImportError as e:
-    print(f"❌ TensorFlow не установлен: {e}")
+    logger.error(f"❌ TensorFlow не установлен: {e}")
     TF_AVAILABLE = False
-    CompatibleBatchNormalization = None
+    TF_VERSION = "N/A"
 
 # ===== СОЗДАЕМ ФЕЙКОВЫЕ МОДУЛИ ДЛЯ UNPICKLE =====
-import sys
 import types
 
 if 'src' not in sys.modules:
@@ -163,23 +155,50 @@ class HaarCascade_RF_Model:
 sys.modules['src.models'].HOG_SVM_Model = HOG_SVM_Model
 sys.modules['src.models'].HaarCascade_RF_Model = HaarCascade_RF_Model
 
-# ===== ПУТИ К МОДЕЛЯМ =====
-BASE_DIR = os.getcwd()
-TRAINED_MODELS_DIR = os.path.join(BASE_DIR, 'trained_models')
+# ===== ПУТИ К МОДЕЛЯМ (ИСПРАВЛЕННЫЕ) =====
+# Определяем базовую директорию относительно файла app.py
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# trained_models находится на уровень выше от web_app
+TRAINED_MODELS_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), 'trained_models')
+
+# Если не нашли, пробуем другие варианты
+if not os.path.exists(TRAINED_MODELS_DIR):
+    # Пробуем от текущей директории
+    TRAINED_MODELS_DIR = os.path.join(os.getcwd(), 'trained_models')
+
+if not os.path.exists(TRAINED_MODELS_DIR):
+    # Пробуем абсолютный путь для Streamlit Cloud
+    TRAINED_MODELS_DIR = '/mount/src/project_ip/trained_models'
+
+logger.info(f"📂 TRAINED_MODELS_DIR: {TRAINED_MODELS_DIR}")
+logger.info(f"📂 Существует: {os.path.exists(TRAINED_MODELS_DIR)}")
+
+# Список файлов в директории
+if os.path.exists(TRAINED_MODELS_DIR):
+    files = os.listdir(TRAINED_MODELS_DIR)
+    logger.info(f"📂 Файлы в trained_models: {files}")
+
 MODEL1_PATH = os.path.join(TRAINED_MODELS_DIR, 'model1_hog_svm.pkl')
 MODEL2_PATH = os.path.join(TRAINED_MODELS_DIR, 'model2_haar_rf.pkl')
-MODEL3_PATH_FIXED_H5 = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn_fixed.h5')
-MODEL3_PATH_NEW_KERAS = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn_new.keras')
-MODEL3_PATH_OLD = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn.h5')
-
-# Приоритет: fixed.h5 -> new.keras -> old.h5
-if os.path.exists(MODEL3_PATH_FIXED_H5):
-    MODEL3_PATH = MODEL3_PATH_FIXED_H5
-elif os.path.exists(MODEL3_PATH_NEW_KERAS):
-    MODEL3_PATH = MODEL3_PATH_NEW_KERAS
-else:
-    MODEL3_PATH = MODEL3_PATH_OLD
 LABELS_MAP_PATH = os.path.join(TRAINED_MODELS_DIR, 'labels_map.json')
+
+# CNN модель - пробуем разные варианты
+MODEL3_CANDIDATES = [
+    'model3_cnn_fixed.h5',
+    'model3_cnn_new.keras', 
+    'model3_cnn.h5',
+]
+
+MODEL3_PATH = None
+for candidate in MODEL3_CANDIDATES:
+    path = os.path.join(TRAINED_MODELS_DIR, candidate)
+    if os.path.exists(path):
+        MODEL3_PATH = path
+        logger.info(f"✅ Найден файл CNN: {candidate}")
+        break
+
+if MODEL3_PATH is None:
+    logger.warning("⚠️ Файл CNN модели не найден!")
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
 st.set_page_config(
@@ -214,12 +233,21 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ===== ЗАГРУЗКА МОДЕЛЕЙ (ИСПРАВЛЕННАЯ) =====
+# ===== ЗАГРУЗКА МОДЕЛЕЙ =====
 @st.cache_resource(show_spinner=False)
 def load_models_from_trained_models():
-    """Загрузка моделей с детальной отладкой"""
+    """Загрузка моделей"""
+    debug_info = []
+    debug_info.append(f"TensorFlow: {TF_VERSION}")
+    debug_info.append(f"TRAINED_MODELS_DIR: {TRAINED_MODELS_DIR}")
+    debug_info.append(f"Существует: {os.path.exists(TRAINED_MODELS_DIR)}")
+    
     if not os.path.exists(TRAINED_MODELS_DIR):
-        return None, None, None, {}, False, "Папка trained_models/ не найдена"
+        return None, None, None, {}, False, "Папка trained_models/ не найдена", debug_info
+    
+    # Список файлов
+    files = os.listdir(TRAINED_MODELS_DIR)
+    debug_info.append(f"Файлы: {files}")
     
     try:
         labels_map = {0: 'Без маски', 1: 'С маской'}
@@ -238,40 +266,36 @@ def load_models_from_trained_models():
             try:
                 with open(MODEL1_PATH, 'rb') as f:
                     model1 = pickle.load(f)
-                print("✅ Model1 (HOG+SVM) загружена")
+                debug_info.append("Model1: ✅ Загружена")
             except Exception as e:
-                print(f"❌ Ошибка загрузки Model1: {e}")
+                debug_info.append(f"Model1: ❌ {str(e)[:50]}")
+        else:
+            debug_info.append("Model1: ❌ Файл не найден")
         
         # ===== МОДЕЛЬ 2 =====
         if os.path.exists(MODEL2_PATH):
             try:
                 with open(MODEL2_PATH, 'rb') as f:
                     model2 = pickle.load(f)
-                print("✅ Model2 (Haar+RF) загружена")
+                debug_info.append("Model2: ✅ Загружена")
             except Exception as e:
-                print(f"❌ Ошибка загрузки Model2: {e}")
+                debug_info.append(f"Model2: ❌ {str(e)[:50]}")
+        else:
+            debug_info.append("Model2: ❌ Файл не найден")
         
         # ===== МОДЕЛЬ 3: CNN =====
-        if os.path.exists(MODEL3_PATH):
+        if MODEL3_PATH and os.path.exists(MODEL3_PATH):
             if not TF_AVAILABLE:
-                print("❌ TensorFlow не установлен!")
+                debug_info.append("Model3: ❌ TensorFlow не установлен")
             else:
-                print("🔄 Пытаюсь загрузить CNN...")
+                debug_info.append(f"Model3: Пробуем загрузить {os.path.basename(MODEL3_PATH)}")
                 
-                # === ПОПЫТКА 1: С CompatibleBatchNormalization ===
                 try:
-                    print("   Попытка 1: load_model с CompatibleBatchNormalization")
-                    
-                    custom_objects = {
-                        'BatchNormalization': CompatibleBatchNormalization,
-                    }
-                    
                     model3_keras = tf.keras.models.load_model(
                         MODEL3_PATH, 
-                        compile=False,
-                        custom_objects=custom_objects
+                        compile=False
                     )
-                    print(f"   ✅ CNN загружена! Входной размер: {model3_keras.input_shape}")
+                    debug_info.append(f"Model3: ✅ Загружена! Shape: {model3_keras.input_shape}")
                     
                     class CNNWrapper:
                         def __init__(self, model):
@@ -287,141 +311,24 @@ def load_models_from_trained_models():
                             return predictions
                     
                     model3 = CNNWrapper(model3_keras)
-                    print("   ✅ CNNWrapper создан")
                     
-                except Exception as e1:
-                    print(f"   ❌ Попытка 1 не удалась: {e1}")
-                    
-                    # === ПОПЫТКА 2: Исправление H5 файла напрямую ===
-                    try:
-                        print("   Попытка 2: Исправляю H5 файл и загружаю")
-                        
-                        import h5py
-                        import tempfile
-                        import shutil
-                        
-                        # Создаём временный исправленный файл
-                        with tempfile.NamedTemporaryFile(suffix='.h5', delete=False) as tmp:
-                            tmp_path = tmp.name
-                        
-                        shutil.copy(MODEL3_PATH, tmp_path)
-                        
-                        # Исправляем конфигурацию в H5 файле
-                        with h5py.File(tmp_path, 'r+') as f:
-                            if 'model_config' in f.attrs:
-                                config_json = f.attrs['model_config']
-                                if isinstance(config_json, bytes):
-                                    config_json = config_json.decode('utf-8')
-                                
-                                # Заменяем [3] на 3 и [-1] на -1
-                                import re
-                                config_json = re.sub(r'"axis":\s*\[(\-?\d+)\]', r'"axis": \1', config_json)
-                                
-                                f.attrs['model_config'] = config_json
-                                print("   ✅ Конфигурация исправлена")
-                        
-                        # Загружаем исправленную модель
-                        model3_keras = tf.keras.models.load_model(tmp_path, compile=False)
-                        print(f"   ✅ CNN загружена из исправленного файла!")
-                        
-                        # Удаляем временный файл
-                        os.unlink(tmp_path)
-                        
-                        class CNNWrapper:
-                            def __init__(self, model):
-                                self.model = model
-                            
-                            def predict_proba(self, X):
-                                if X.max() > 1.0:
-                                    X = X / 255.0
-                                predictions = self.model.predict(X, verbose=0)
-                                if predictions.shape[-1] == 1:
-                                    prob_positive = predictions.flatten()
-                                    return np.column_stack([1 - prob_positive, prob_positive])
-                                return predictions
-                        
-                        model3 = CNNWrapper(model3_keras)
-                        print("   ✅ CNNWrapper создан (попытка 2)")
-                        
-                    except Exception as e2:
-                        print(f"   ❌ Попытка 2 не удалась: {e2}")
-                        
-                        # === ПОПЫТКА 3: Пересоздаём архитектуру ===
-                        try:
-                            print("   Попытка 3: Создаю архитектуру MobileNetV2")
-                            
-                            from tensorflow.keras.applications import MobileNetV2
-                            from tensorflow.keras import Sequential
-                            from tensorflow.keras.layers import (
-                                GlobalAveragePooling2D, Dense, 
-                                Dropout, Input
-                            )
-                            
-                            base_model = MobileNetV2(
-                                input_shape=(128, 128, 3),
-                                include_top=False,
-                                weights='imagenet'
-                            )
-                            base_model.trainable = False
-                            
-                            model3_keras = Sequential([
-                                Input(shape=(128, 128, 3)),
-                                base_model,
-                                GlobalAveragePooling2D(),
-                                Dropout(0.3),
-                                Dense(128, activation='relu'),
-                                Dropout(0.2),
-                                Dense(2, activation='softmax')
-                            ])
-                            
-                            print("   ⚠️ Используем pretrained ImageNet веса (без дообучения)")
-                            
-                            class CNNWrapper:
-                                def __init__(self, model):
-                                    self.model = model
-                                
-                                def predict_proba(self, X):
-                                    # Нормализация для MobileNetV2
-                                    if X.max() > 1.0:
-                                        X = X / 255.0
-                                    # MobileNetV2 ожидает [-1, 1]
-                                    X = (X - 0.5) * 2
-                                    predictions = self.model.predict(X, verbose=0)
-                                    if predictions.shape[-1] == 1:
-                                        prob_positive = predictions.flatten()
-                                        return np.column_stack([1 - prob_positive, prob_positive])
-                                    return predictions
-                            
-                            model3 = CNNWrapper(model3_keras)
-                            print("   ✅ CNNWrapper создан (попытка 3 - pretrained)")
-                            
-                        except Exception as e3:
-                            print(f"   ❌ Попытка 3 не удалась: {e3}")
-                            model3 = None
+                except Exception as e:
+                    debug_info.append(f"Model3: ❌ Ошибка загрузки: {str(e)[:100]}")
+                    model3 = None
         else:
-            print(f"❌ Файл модели не найден: {MODEL3_PATH}")
-        
-        # Выводим итоговый статус
-        print(f"\n{'='*50}")
-        print(f"Итоговый статус загрузки моделей:")
-        print(f"  Model1 (HOG+SVM):  {'✅ Загружена' if model1 else '❌ Не загружена'}")
-        print(f"  Model2 (Haar+RF):  {'✅ Загружена' if model2 else '❌ Не загружена'}")
-        print(f"  Model3 (CNN):      {'✅ Загружена' if model3 else '❌ Не загружена'}")
-        print(f"{'='*50}\n")
+            debug_info.append("Model3: ❌ Файл не найден")
         
         any_loaded = model1 is not None or model2 is not None or model3 is not None
         error_msg = "" if any_loaded else "Не удалось загрузить модели"
         
-        return model1, model2, model3, labels_map, any_loaded, error_msg
+        return model1, model2, model3, labels_map, any_loaded, error_msg, debug_info
     
     except Exception as e:
-        print(f"❌ Критическая ошибка загрузки: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None, None, {}, False, str(e)
+        debug_info.append(f"Критическая ошибка: {str(e)}")
+        return None, None, None, {}, False, str(e), debug_info
 
 # Загружаем модели
-model1, model2, model3, labels_map, models_loaded, error_msg = load_models_from_trained_models()
+model1, model2, model3, labels_map, models_loaded, error_msg, debug_info = load_models_from_trained_models()
 
 # ===== ЗАГОЛОВОК =====
 st.markdown('<h1 class="main-header">😷 Система детекции масок на лице</h1>', 
@@ -431,6 +338,11 @@ st.markdown("---")
 # ===== SIDEBAR =====
 with st.sidebar:
     st.header("⚙️ Панель управления")
+    
+    # ===== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ =====
+    with st.expander("🔧 Debug Info", expanded=False):
+        for info in debug_info:
+            st.text(info)
     
     # Выбор модели
     available_models = []
@@ -449,6 +361,7 @@ with st.sidebar:
         )
     else:
         st.error("Нет доступных моделей")
+        st.error(error_msg)
         st.stop()
     
     # Порог уверенности
@@ -503,7 +416,7 @@ with col1:
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        st.image(image, caption='Загруженное изображение', use_column_width=True)
+        st.image(image, caption='Загруженное изображение', width=None)
         
         img_array = np.array(image)
         st.caption(f"Размер: {img_array.shape[1]}×{img_array.shape[0]} пикселей")
@@ -623,14 +536,6 @@ with col2:
                             })
                             
                             st.bar_chart(prob_df.set_index('Класс'))
-                            
-                            with st.expander("Детальная информация"):
-                                st.write("**Вероятности для каждого класса:**")
-                                for i, label in labels_map.items():
-                                    prob = pred_proba[i] if i < len(pred_proba) else 0
-                                    st.write(f"- {label}: {prob:.4f} ({prob*100:.2f}%)")
-                                
-                                st.write(f"\n**Порог уверенности:** {confidence_threshold}")
                         
                         except Exception as e:
                             st.error(f"Ошибка предсказания: {str(e)}")
@@ -649,29 +554,10 @@ with col2:
         1. Загрузите фото человека с лицом
         2. Выберите модель для предсказания
         3. Получите результат детекции маски
-        
-        ### Рекомендации:
-        
-        - Используйте четкие фотографии
-        - Лицо должно быть хорошо видно
-        - Избегайте сильных теней
         """)
 
 # ===== FOOTER =====
 st.markdown("---")
-
-with st.expander("О системе"):
-    st.markdown("""
-    ### Система детекции масок
-    
-    Использует три различных подхода к классификации изображений:
-    
-    1. **Классические методы** - HOG + SVM, Haar + RF
-    2. **Глубокое обучение** - CNN с Transfer Learning
-    
-    **Технологии:** Python, OpenCV, scikit-learn, TensorFlow, Streamlit
-    """)
-
 st.markdown("""
     <div style='text-align: center; color: gray; padding: 20px;'>
         <p>© 2024 Mask Detection System</p>
