@@ -11,35 +11,19 @@ import os
 import warnings
 import pandas as pd
 import sys
-import logging
+import types
 
 warnings.filterwarnings('ignore')
-
-# ===== НАСТРОЙКА ЛОГИРОВАНИЯ =====
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    stream=sys.stdout
-)
-logger = logging.getLogger(__name__)
 
 # ===== ИМПОРТЫ ДЛЯ TENSORFLOW =====
 try:
     import tensorflow as tf
     from tensorflow.keras.models import load_model
-    from tensorflow.keras import layers
     TF_AVAILABLE = True
-    TF_VERSION = tf.__version__
-    logger.info(f"✅ TensorFlow {TF_VERSION} загружен")
-    
-except ImportError as e:
-    logger.error(f"❌ TensorFlow не установлен: {e}")
+except ImportError:
     TF_AVAILABLE = False
-    TF_VERSION = "N/A"
 
 # ===== СОЗДАЕМ ФЕЙКОВЫЕ МОДУЛИ ДЛЯ UNPICKLE =====
-import types
-
 if 'src' not in sys.modules:
     src_module = types.ModuleType('src')
     sys.modules['src'] = src_module
@@ -155,50 +139,28 @@ class HaarCascade_RF_Model:
 sys.modules['src.models'].HOG_SVM_Model = HOG_SVM_Model
 sys.modules['src.models'].HaarCascade_RF_Model = HaarCascade_RF_Model
 
-# ===== ПУТИ К МОДЕЛЯМ (ИСПРАВЛЕННЫЕ) =====
-# Определяем базовую директорию относительно файла app.py
+# ===== ПУТИ К МОДЕЛЯМ =====
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-# trained_models находится на уровень выше от web_app
 TRAINED_MODELS_DIR = os.path.join(os.path.dirname(SCRIPT_DIR), 'trained_models')
 
-# Если не нашли, пробуем другие варианты
 if not os.path.exists(TRAINED_MODELS_DIR):
-    # Пробуем от текущей директории
     TRAINED_MODELS_DIR = os.path.join(os.getcwd(), 'trained_models')
 
 if not os.path.exists(TRAINED_MODELS_DIR):
-    # Пробуем абсолютный путь для Streamlit Cloud
     TRAINED_MODELS_DIR = '/mount/src/project_ip/trained_models'
-
-logger.info(f"📂 TRAINED_MODELS_DIR: {TRAINED_MODELS_DIR}")
-logger.info(f"📂 Существует: {os.path.exists(TRAINED_MODELS_DIR)}")
-
-# Список файлов в директории
-if os.path.exists(TRAINED_MODELS_DIR):
-    files = os.listdir(TRAINED_MODELS_DIR)
-    logger.info(f"📂 Файлы в trained_models: {files}")
 
 MODEL1_PATH = os.path.join(TRAINED_MODELS_DIR, 'model1_hog_svm.pkl')
 MODEL2_PATH = os.path.join(TRAINED_MODELS_DIR, 'model2_haar_rf.pkl')
 LABELS_MAP_PATH = os.path.join(TRAINED_MODELS_DIR, 'labels_map.json')
 
 # CNN модель - пробуем разные варианты
-MODEL3_CANDIDATES = [
-    'model3_cnn_fixed.h5',
-    'model3_cnn_new.keras', 
-    'model3_cnn.h5',
-]
-
+MODEL3_CANDIDATES = ['model3_cnn_fixed.h5', 'model3_cnn_new.keras', 'model3_cnn.h5']
 MODEL3_PATH = None
 for candidate in MODEL3_CANDIDATES:
     path = os.path.join(TRAINED_MODELS_DIR, candidate)
     if os.path.exists(path):
         MODEL3_PATH = path
-        logger.info(f"✅ Найден файл CNN: {candidate}")
         break
-
-if MODEL3_PATH is None:
-    logger.warning("⚠️ Файл CNN модели не найден!")
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
 st.set_page_config(
@@ -217,11 +179,6 @@ st.markdown("""
         text-align: center;
         margin-bottom: 2rem;
         text-shadow: 2px 2px 4px rgba(0,0,0,0.1);
-        animation: fadeIn 1s;
-    }
-    @keyframes fadeIn {
-        from { opacity: 0; transform: translateY(-20px); }
-        to { opacity: 1; transform: translateY(0); }
     }
     .stProgress > div > div > div > div {
         background: linear-gradient(90deg, #1f77b4, #2ca02c);
@@ -237,17 +194,8 @@ st.markdown("""
 @st.cache_resource(show_spinner=False)
 def load_models_from_trained_models():
     """Загрузка моделей"""
-    debug_info = []
-    debug_info.append(f"TensorFlow: {TF_VERSION}")
-    debug_info.append(f"TRAINED_MODELS_DIR: {TRAINED_MODELS_DIR}")
-    debug_info.append(f"Существует: {os.path.exists(TRAINED_MODELS_DIR)}")
-    
     if not os.path.exists(TRAINED_MODELS_DIR):
-        return None, None, None, {}, False, "Папка trained_models/ не найдена", debug_info
-    
-    # Список файлов
-    files = os.listdir(TRAINED_MODELS_DIR)
-    debug_info.append(f"Файлы: {files}")
+        return None, None, None, {}, False, "Папка trained_models/ не найдена"
     
     try:
         labels_map = {0: 'Без маски', 1: 'С маской'}
@@ -261,74 +209,54 @@ def load_models_from_trained_models():
         
         model1, model2, model3 = None, None, None
         
-        # ===== МОДЕЛЬ 1 =====
+        # Модель 1
         if os.path.exists(MODEL1_PATH):
             try:
                 with open(MODEL1_PATH, 'rb') as f:
                     model1 = pickle.load(f)
-                debug_info.append("Model1: ✅ Загружена")
-            except Exception as e:
-                debug_info.append(f"Model1: ❌ {str(e)[:50]}")
-        else:
-            debug_info.append("Model1: ❌ Файл не найден")
+            except:
+                pass
         
-        # ===== МОДЕЛЬ 2 =====
+        # Модель 2
         if os.path.exists(MODEL2_PATH):
             try:
                 with open(MODEL2_PATH, 'rb') as f:
                     model2 = pickle.load(f)
-                debug_info.append("Model2: ✅ Загружена")
-            except Exception as e:
-                debug_info.append(f"Model2: ❌ {str(e)[:50]}")
-        else:
-            debug_info.append("Model2: ❌ Файл не найден")
+            except:
+                pass
         
-        # ===== МОДЕЛЬ 3: CNN =====
-        if MODEL3_PATH and os.path.exists(MODEL3_PATH):
-            if not TF_AVAILABLE:
-                debug_info.append("Model3: ❌ TensorFlow не установлен")
-            else:
-                debug_info.append(f"Model3: Пробуем загрузить {os.path.basename(MODEL3_PATH)}")
+        # Модель 3: CNN
+        if MODEL3_PATH and os.path.exists(MODEL3_PATH) and TF_AVAILABLE:
+            try:
+                model3_keras = tf.keras.models.load_model(MODEL3_PATH, compile=False)
                 
-                try:
-                    model3_keras = tf.keras.models.load_model(
-                        MODEL3_PATH, 
-                        compile=False
-                    )
-                    debug_info.append(f"Model3: ✅ Загружена! Shape: {model3_keras.input_shape}")
+                class CNNWrapper:
+                    def __init__(self, model):
+                        self.model = model
                     
-                    class CNNWrapper:
-                        def __init__(self, model):
-                            self.model = model
-                        
-                        def predict_proba(self, X):
-                            if X.max() > 1.0:
-                                X = X / 255.0
-                            predictions = self.model.predict(X, verbose=0)
-                            if predictions.shape[-1] == 1:
-                                prob_positive = predictions.flatten()
-                                return np.column_stack([1 - prob_positive, prob_positive])
-                            return predictions
-                    
-                    model3 = CNNWrapper(model3_keras)
-                    
-                except Exception as e:
-                    debug_info.append(f"Model3: ❌ Ошибка загрузки: {str(e)[:100]}")
-                    model3 = None
-        else:
-            debug_info.append("Model3: ❌ Файл не найден")
+                    def predict_proba(self, X):
+                        if X.max() > 1.0:
+                            X = X / 255.0
+                        predictions = self.model.predict(X, verbose=0)
+                        if predictions.shape[-1] == 1:
+                            prob_positive = predictions.flatten()
+                            return np.column_stack([1 - prob_positive, prob_positive])
+                        return predictions
+                
+                model3 = CNNWrapper(model3_keras)
+            except:
+                pass
         
         any_loaded = model1 is not None or model2 is not None or model3 is not None
         error_msg = "" if any_loaded else "Не удалось загрузить модели"
         
-        return model1, model2, model3, labels_map, any_loaded, error_msg, debug_info
+        return model1, model2, model3, labels_map, any_loaded, error_msg
     
     except Exception as e:
-        debug_info.append(f"Критическая ошибка: {str(e)}")
-        return None, None, None, {}, False, str(e), debug_info
+        return None, None, None, {}, False, str(e)
 
 # Загружаем модели
-model1, model2, model3, labels_map, models_loaded, error_msg, debug_info = load_models_from_trained_models()
+model1, model2, model3, labels_map, models_loaded, error_msg = load_models_from_trained_models()
 
 # ===== ЗАГОЛОВОК =====
 st.markdown('<h1 class="main-header">😷 Система детекции масок на лице</h1>', 
@@ -338,11 +266,6 @@ st.markdown("---")
 # ===== SIDEBAR =====
 with st.sidebar:
     st.header("⚙️ Панель управления")
-    
-    # ===== ОТЛАДОЧНАЯ ИНФОРМАЦИЯ =====
-    with st.expander("🔧 Debug Info", expanded=False):
-        for info in debug_info:
-            st.text(info)
     
     # Выбор модели
     available_models = []
@@ -437,31 +360,25 @@ with col2:
             img_resized = cv2.resize(img_array, (128, 128))
             img_input = np.expand_dims(img_resized, axis=0) / 255.0
             
-            # ===== ПРЕДСКАЗАНИЯ =====
             if model_choice == "Все модели":
                 st.subheader("Сравнение моделей")
                 
                 models = []
                 if model1:
-                    models.append((model1, "HOG + SVM", "#1f77b4"))
+                    models.append((model1, "HOG + SVM"))
                 if model2:
-                    models.append((model2, "Haar Cascade + RF", "#2ca02c"))
+                    models.append((model2, "Haar Cascade + RF"))
                 if model3:
-                    models.append((model3, "CNN", "#d62728"))
+                    models.append((model3, "CNN"))
                 
-                for model, name, color in models:
+                for model, name in models:
                     with st.container():
                         st.markdown(f"### {name}")
                         
                         try:
                             pred_proba = model.predict_proba(img_input)[0]
-                            
-                            if len(pred_proba) > 2:
-                                pred_class = np.argmax(pred_proba)
-                            else:
-                                pred_class = 1 if pred_proba[1] > 0.5 else 0
-                            
-                            confidence = pred_proba[pred_class] if len(pred_proba) > pred_class else pred_proba[1]
+                            pred_class = 1 if pred_proba[1] > 0.5 else 0
+                            confidence = pred_proba[pred_class]
                             prediction = labels_map.get(pred_class, "С маской" if pred_class == 1 else "Без маски")
                             
                             col_a, col_b = st.columns([2, 1])
@@ -502,13 +419,8 @@ with col2:
                     with st.spinner('Обработка изображения...'):
                         try:
                             pred_proba = model.predict_proba(img_input)[0]
-                            
-                            if len(pred_proba) > 2:
-                                pred_class = np.argmax(pred_proba)
-                            else:
-                                pred_class = 1 if pred_proba[1] > 0.5 else 0
-                            
-                            confidence = pred_proba[pred_class] if len(pred_proba) > pred_class else pred_proba[1]
+                            pred_class = 1 if pred_proba[1] > 0.5 else 0
+                            confidence = pred_proba[pred_class]
                             prediction = labels_map.get(pred_class, "С маской" if pred_class == 1 else "Без маски")
                             
                             st.markdown(f"## {prediction}")
