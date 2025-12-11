@@ -167,10 +167,17 @@ BASE_DIR = os.getcwd()
 TRAINED_MODELS_DIR = os.path.join(BASE_DIR, 'trained_models')
 MODEL1_PATH = os.path.join(TRAINED_MODELS_DIR, 'model1_hog_svm.pkl')
 MODEL2_PATH = os.path.join(TRAINED_MODELS_DIR, 'model2_haar_rf.pkl')
-# CNN модель - пробуем новый формат, потом старый
-MODEL3_PATH_NEW = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn_new.keras')
+MODEL3_PATH_FIXED_H5 = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn_fixed.h5')
+MODEL3_PATH_NEW_KERAS = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn_new.keras')
 MODEL3_PATH_OLD = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn.h5')
-MODEL3_PATH = MODEL3_PATH_NEW if os.path.exists(MODEL3_PATH_NEW) else MODEL3_PATH_OLD
+
+# Приоритет: fixed.h5 -> new.keras -> old.h5
+if os.path.exists(MODEL3_PATH_FIXED_H5):
+    MODEL3_PATH = MODEL3_PATH_FIXED_H5
+elif os.path.exists(MODEL3_PATH_NEW_KERAS):
+    MODEL3_PATH = MODEL3_PATH_NEW_KERAS
+else:
+    MODEL3_PATH = MODEL3_PATH_OLD
 LABELS_MAP_PATH = os.path.join(TRAINED_MODELS_DIR, 'labels_map.json')
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
