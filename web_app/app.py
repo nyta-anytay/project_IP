@@ -12,6 +12,8 @@ import sys
 import os
 import warnings
 warnings.filterwarnings('ignore')
+import sys
+sys.path.append('src') 
 
 
 
@@ -74,25 +76,22 @@ def load_all_models():
     
     if missing_files:
         return None, None, None, None, False, f"Отсутствуют файлы: {', '.join(missing_files)}"
-    
+
     try:
-        # Загрузка labels_map (создаем, если нет файла)
+        # ===== labels_map =====
         if os.path.exists(LABELS_MAP_PATH):
             with open(LABELS_MAP_PATH, 'r') as f:
                 labels_dict = json.load(f)
                 labels_map = {int(k): v for k, v in labels_dict.items()}
         else:
-            # Создаем стандартный labels_map
             labels_map = {0: "Без маски", 1: "С маской"}
-            # Сохраняем для будущего использования
+            os.makedirs(os.path.dirname(LABELS_MAP_PATH), exist_ok=True)
             with open(LABELS_MAP_PATH, 'w') as f:
                 json.dump(labels_map, f)
-        
-        # Загружаем модели с обработкой ошибок для каждой отдельно
+
         models_loaded = []
-        error_messages = []
-        
-        # Модель 1
+
+        # ===== Модель 1: HOG + SVM =====
         try:
             with open(MODEL1_PATH, 'rb') as f:
                 model1 = pickle.load(f)
@@ -100,8 +99,8 @@ def load_all_models():
         except Exception as e:
             model1 = None
             models_loaded.append(("model1_hog_svm", False, str(e)))
-        
-        # Модель 2
+
+        # ===== Модель 2: Haar + RF =====
         try:
             with open(MODEL2_PATH, 'rb') as f:
                 model2 = pickle.load(f)
@@ -109,33 +108,38 @@ def load_all_models():
         except Exception as e:
             model2 = None
             models_loaded.append(("model2_haar_rf", False, str(e)))
-        
-        # Модель 3 (TensorFlow)
+
+        # ===== Модель 3: CNN =====
         try:
-            model3_keras = tf.keras.models.load_model(MODEL3_PATH)
-            # Обертка для CNN
+            model3_keras = load_model(
+                MODEL3_PATH,
+                compile=False,
+                custom_objects={'BatchNormalization': BatchNormalization}
+            )
+
             class CNNWrapper:
                 def __init__(self, model):
                     self.model = model
                 def predict_proba(self, X):
                     return self.model.predict(X, verbose=0)
+
             model3 = CNNWrapper(model3_keras)
             models_loaded.append(("model3_cnn", True, ""))
         except Exception as e:
             model3 = None
             models_loaded.append(("model3_cnn", False, str(e)))
-        
-        # Проверяем, все ли модели загрузились
+
+        # Проверяем, все ли модели загружены
         all_loaded = all(status for _, status, _ in models_loaded)
-        
+
         # Формируем сообщение об ошибках
         error_msg = ""
         if not all_loaded:
             error_details = [f"{name}: {msg}" for name, status, msg in models_loaded if not status and msg]
             error_msg = f"Ошибки загрузки: {'; '.join(error_details)}"
-        
+
         return model1, model2, model3, labels_map, all_loaded, error_msg
-        
+
     except Exception as e:
         return None, None, None, None, False, f"Ошибка загрузки: {str(e)}"
 
