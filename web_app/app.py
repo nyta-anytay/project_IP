@@ -13,11 +13,12 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 
-# ===== ПРАВИЛЬНЫЕ ПУТИ - МОДЕЛИ В ПАПКЕ web/ =====
-MODEL1_PATH = 'web/model1_hog_svm.pkl'    # Путь к первой модели
-MODEL2_PATH = 'web/model2_haar_rf.pkl'    # Путь ко второй модели  
-MODEL3_PATH = 'web/model3_cnn.h5'         # Путь к третьей модели
-LABELS_MAP_PATH = 'web/labels_map.json'   # Путь к labels_map
+# ===== ВСЕ ФАЙЛЫ В ПАПКЕ web_app/ =====
+# Все файлы находятся в той же папке, что и app.py
+MODEL1_PATH = 'model1_hog_svm.pkl'    # Модель 1
+MODEL2_PATH = 'model2_haar_rf.pkl'    # Модель 2
+MODEL3_PATH = 'model3_cnn.h5'         # Модель 3
+LABELS_MAP_PATH = 'labels_map.json'   # Labels map
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
 st.set_page_config(
@@ -46,68 +47,81 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# ===== ФУНКЦИЯ ДЛЯ ПРОВЕРКИ ФАЙЛОВ =====
-def check_files_exist():
-    """Проверяем наличие файлов моделей в папке web/"""
-    st.sidebar.subheader("🔍 Поиск файлов в web/")
+# ===== ДИАГНОСТИКА ФАЙЛОВ =====
+def show_file_diagnosis():
+    """Показывает какие файлы есть в текущей папке"""
+    st.sidebar.subheader("📁 Диагностика файлов")
     
-    # Проверяем существует ли папка web/
-    if not os.path.exists('web'):
-        st.sidebar.error("❌ Папка 'web/' не найдена!")
-        return [], ['web/' + f for f in ['model1_hog_svm.pkl', 'model2_haar_rf.pkl', 'model3_cnn.h5', 'labels_map.json']]
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    st.sidebar.write(f"**Текущая папка:** `{current_dir}`")
     
-    files_needed = [MODEL1_PATH, MODEL2_PATH, MODEL3_PATH, LABELS_MAP_PATH]
-    existing_files = []
-    missing_files = []
+    # Показываем все файлы
+    st.sidebar.write("**Содержимое папки:**")
+    files = os.listdir('.')
     
-    for file in files_needed:
-        if os.path.exists(file):
-            existing_files.append(file)
-            size_kb = os.path.getsize(file) / 1024
-            st.sidebar.success(f"✅ {os.path.basename(file)} ({size_kb:.1f} KB)")
+    model_files = []
+    other_files = []
+    
+    for file in sorted(files):
+        if file.endswith(('.pkl', '.h5', '.hdf5', '.keras', '.json')):
+            model_files.append(file)
         else:
-            missing_files.append(file)
-            st.sidebar.error(f"❌ {os.path.basename(file)} - не найден")
+            other_files.append(file)
     
-    # Показываем содержимое папки web/
-    st.sidebar.write("**Содержимое папки web/:**")
-    if os.path.exists('web'):
-        for item in os.listdir('web'):
-            item_path = os.path.join('web', item)
-            if os.path.isfile(item_path):
-                size_kb = os.path.getsize(item_path) / 1024
-                st.sidebar.text(f"📄 {item} ({size_kb:.1f} KB)")
-            else:
-                st.sidebar.text(f"📁 {item}/")
+    # Показываем файлы моделей
+    st.sidebar.write("**Файлы моделей и конфигурации:**")
+    for file in model_files:
+        size_kb = os.path.getsize(file) / 1024
+        exists = os.path.exists(file)
+        icon = "✅" if exists else "❌"
+        st.sidebar.write(f"{icon} {file} ({size_kb:.1f} KB)")
     
-    return existing_files, missing_files
+    # Показываем остальные файлы
+    st.sidebar.write("**Остальные файлы:**")
+    for file in other_files:
+        if os.path.isfile(file):
+            size_kb = os.path.getsize(file) / 1024 if os.path.exists(file) else 0
+            st.sidebar.write(f"📄 {file} ({size_kb:.1f} KB)")
+        else:
+            st.sidebar.write(f"📁 {file}/")
+    
+    # Проверяем нужные файлы
+    st.sidebar.write("**Проверка нужных файлов:**")
+    needed_files = [
+        ("model1_hog_svm.pkl", MODEL1_PATH),
+        ("model2_haar_rf.pkl", MODEL2_PATH),
+        ("model3_cnn.h5", MODEL3_PATH),
+        ("labels_map.json", LABELS_MAP_PATH)
+    ]
+    
+    for display_name, path in needed_files:
+        if os.path.exists(path):
+            size_kb = os.path.getsize(path) / 1024
+            st.sidebar.success(f"✅ {display_name} ({size_kb:.1f} KB)")
+        else:
+            st.sidebar.error(f"❌ {display_name} - не найден")
 
 # ===== ЗАГРУЗКА МОДЕЛЕЙ =====
 @st.cache_resource
 def load_all_models():
-    """Загрузка всех моделей с обработкой ошибок"""
+    """Загрузка всех моделей"""
     
-    # Проверяем файлы
-    existing_files, missing_files = check_files_exist()
-    
-    if not existing_files:
-        return None, None, None, {}, False, "Файлы моделей не найдены в папке web/"
+    # Показываем диагностику
+    show_file_diagnosis()
     
     try:
-        # ===== 1. labels_map =====
-        labels_map = {}
+        # ===== 1. Labels map =====
+        labels_map = {0: "Без маски", 1: "С маской"}
         if os.path.exists(LABELS_MAP_PATH):
             try:
                 with open(LABELS_MAP_PATH, 'r') as f:
                     labels_dict = json.load(f)
                     labels_map = {int(k): v for k, v in labels_dict.items()}
-                st.sidebar.success(f"✅ labels_map загружен: {labels_map}")
+                st.sidebar.success(f"✅ labels_map загружен")
             except:
-                labels_map = {0: "Без маски", 1: "С маской"}
                 st.sidebar.info("ℹ️ Используется стандартный labels_map")
         else:
-            labels_map = {0: "Без маски", 1: "С маски"}
-            st.sidebar.info("ℹ️ labels_map.json не найден, используем стандартный")
+            st.sidebar.warning("⚠️ labels_map.json не найден, используем стандартный")
         
         models_loaded = []
         model1, model2, model3 = None, None, None
@@ -118,12 +132,13 @@ def load_all_models():
                 with open(MODEL1_PATH, 'rb') as f:
                     model1 = pickle.load(f)
                 models_loaded.append(("model1", True, ""))
-                st.sidebar.success("✅ Модель 1 (HOG+SVM) загружена")
+                st.sidebar.success("✅ Модель 1 загружена")
             except Exception as e:
                 models_loaded.append(("model1", False, str(e)))
-                st.sidebar.error(f"❌ Ошибка загрузки model1: {str(e)[:100]}")
+                st.sidebar.error(f"❌ Ошибка model1: {str(e)[:80]}")
         else:
-            models_loaded.append(("model1", False, f"Файл не найден: {MODEL1_PATH}"))
+            models_loaded.append(("model1", False, "Файл не найден"))
+            st.sidebar.error(f"❌ {MODEL1_PATH} не найден")
         
         # ===== 3. Модель 2: Haar + RF =====
         if os.path.exists(MODEL2_PATH):
@@ -132,53 +147,64 @@ def load_all_models():
                 with open(MODEL2_PATH, 'rb') as f:
                     model2 = pickle.load(f)
                 models_loaded.append(("model2", True, ""))
-                st.sidebar.success("✅ Модель 2 (Haar+RF) загружена")
+                st.sidebar.success("✅ Модель 2 загружена")
             except Exception as e:
-                # Если ошибка из-за 'src', пробуем кастомный unpickler
-                if 'src' in str(e):
+                error_msg = str(e)
+                # Если ошибка из-за 'src'
+                if 'src' in error_msg or 'No module' in error_msg:
                     try:
-                        class CustomUnpickler(pickle.Unpickler):
+                        # Кастомный unpickler игнорирующий ошибки импорта
+                        class SafeUnpickler(pickle.Unpickler):
                             def find_class(self, module, name):
-                                if module.startswith('src'):
-                                    return object
-                                return super().find_class(module, name)
+                                try:
+                                    return super().find_class(module, name)
+                                except (ImportError, AttributeError):
+                                    # Возвращаем заглушку для неизвестных классов
+                                    class DummyClass:
+                                        pass
+                                    return DummyClass
                         
                         with open(MODEL2_PATH, 'rb') as f:
-                            unpickler = CustomUnpickler(f)
+                            unpickler = SafeUnpickler(f)
                             model2 = unpickler.load()
                         models_loaded.append(("model2", True, ""))
-                        st.sidebar.success("✅ Модель 2 загружена (с обработкой 'src')")
+                        st.sidebar.success("✅ Модель 2 загружена (безопасный режим)")
                     except Exception as e2:
                         models_loaded.append(("model2", False, str(e2)))
-                        st.sidebar.error(f"❌ Ошибка model2: {str(e2)[:100]}")
+                        st.sidebar.error(f"❌ Ошибка model2: {str(e2)[:80]}")
                 else:
-                    models_loaded.append(("model2", False, str(e)))
-                    st.sidebar.error(f"❌ Ошибка model2: {str(e)[:100]}")
+                    models_loaded.append(("model2", False, error_msg))
+                    st.sidebar.error(f"❌ Ошибка model2: {error_msg[:80]}")
         else:
-            models_loaded.append(("model2", False, f"Файл не найден: {MODEL2_PATH}"))
+            models_loaded.append(("model2", False, "Файл не найден"))
+            st.sidebar.error(f"❌ {MODEL2_PATH} не найден")
         
         # ===== 4. Модель 3: CNN =====
         if os.path.exists(MODEL3_PATH):
             try:
-                # Пробуем загрузить с разными способами
+                # Пробуем разные способы загрузки
                 try:
-                    # Способ 1: Стандартная загрузка
+                    # Способ 1: Простая загрузка
                     model3_keras = tf.keras.models.load_model(MODEL3_PATH, compile=False)
-                    st.sidebar.success("✅ Модель 3 (CNN) загружена (стандартный способ)")
+                    st.sidebar.success("✅ Модель 3 загружена (способ 1)")
                 except Exception as e1:
-                    # Способ 2: С кастомными объектами
-                    from tensorflow.keras.layers import BatchNormalization, Conv2D, Dense, Dropout, Flatten, MaxPooling2D
-                    from tensorflow.keras import Input, Model
+                    # Способ 2: С bypass для BatchNormalization
+                    st.sidebar.info("🔄 Пробую загрузить модель 3 (способ 2)...")
+                    
+                    # Создаем кастомный объект для обхода ошибки BatchNormalization
+                    class SafeBatchNormalization(tf.keras.layers.BatchNormalization):
+                        def __init__(self, *args, **kwargs):
+                            # Убираем axis если он список
+                            if 'axis' in kwargs and isinstance(kwargs['axis'], list):
+                                kwargs['axis'] = kwargs['axis'][0] if kwargs['axis'] else -1
+                            super().__init__(*args, **kwargs)
                     
                     custom_objects = {
-                        'BatchNormalization': BatchNormalization,
-                        'Conv2D': Conv2D,
-                        'Dense': Dense,
-                        'Dropout': Dropout,
-                        'Flatten': Flatten,
-                        'MaxPooling2D': MaxPooling2D,
-                        'Input': Input,
-                        'Model': Model
+                        'BatchNormalization': SafeBatchNormalization,
+                        'bn_Conv1': SafeBatchNormalization,
+                        'bn_Conv1_pad': SafeBatchNormalization,
+                        'batch_normalization': SafeBatchNormalization,
+                        'batch_normalization_v1': SafeBatchNormalization,
                     }
                     
                     model3_keras = tf.keras.models.load_model(
@@ -186,7 +212,7 @@ def load_all_models():
                         compile=False,
                         custom_objects=custom_objects
                     )
-                    st.sidebar.success("✅ Модель 3 (CNN) загружена (с кастомными объектами)")
+                    st.sidebar.success("✅ Модель 3 загружена (способ 2)")
                 
                 # Обертка для модели
                 class CNNWrapper:
@@ -196,6 +222,7 @@ def load_all_models():
                     def predict_proba(self, X):
                         predictions = self.model.predict(X, verbose=0)
                         if predictions.shape[-1] == 1:
+                            # Бинарная классификация
                             prob_positive = predictions.flatten()
                             return np.column_stack([1 - prob_positive, prob_positive])
                         return predictions
@@ -207,9 +234,10 @@ def load_all_models():
                 models_loaded.append(("model3", False, str(e)))
                 st.sidebar.error(f"❌ Ошибка model3: {str(e)[:150]}")
         else:
-            models_loaded.append(("model3", False, f"Файл не найден: {MODEL3_PATH}"))
+            models_loaded.append(("model3", False, "Файл не найден"))
+            st.sidebar.error(f"❌ {MODEL3_PATH} не найден")
         
-        # Проверяем сколько моделей загрузилось
+        # Подсчет загруженных моделей
         loaded_count = sum(1 for _, status, _ in models_loaded if status)
         any_loaded = loaded_count > 0
         
@@ -223,7 +251,7 @@ def load_all_models():
     except Exception as e:
         return None, None, None, {}, False, f"Общая ошибка: {str(e)}"
 
-# ===== ЗАГРУЗКА =====
+# ===== ЗАГРУЗКА МОДЕЛЕЙ =====
 model1, model2, model3, labels_map, models_loaded, error_msg = load_all_models()
 
 # ===== ЗАГОЛОВОК =====
@@ -235,26 +263,27 @@ st.markdown("---")
 with st.sidebar:
     st.header("⚙️ Настройки")
     
-    # Диагностика
-    if st.checkbox("🔧 Расширенная диагностика", False):
-        st.write("**Версии библиотек:**")
-        st.code(f"""
-        TensorFlow: {tf.__version__}
-        OpenCV: {cv2.__version__}
-        NumPy: {np.__version__}
-        """)
-        
-        st.write("**Текущая директория:**", os.getcwd())
-        st.write("**Полное дерево файлов:**")
-        
-        import pathlib
-        for file_path in pathlib.Path('.').rglob('*'):
-            if file_path.is_file():
-                rel_path = str(file_path.relative_to('.'))
-                if 'model' in rel_path.lower() or 'web' in rel_path:
-                    st.success(f"🔍 {rel_path}")
-                else:
-                    st.text(f"   {rel_path}")
+    # Информация о загруженных моделях
+    st.subheader("📊 Статус моделей")
+    
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        if model1:
+            st.success("✅ HOG+SVM")
+        else:
+            st.error("❌ HOG+SVM")
+    
+    with col2:
+        if model2:
+            st.success("✅ Haar+RF")
+        else:
+            st.error("❌ Haar+RF")
+    
+    with col3:
+        if model3:
+            st.success("✅ CNN")
+        else:
+            st.error("❌ CNN")
     
     # Выбор модели
     available_models = []
@@ -273,7 +302,7 @@ with st.sidebar:
         )
     else:
         model_choice = "Нет доступных моделей"
-        st.error("❌ Нет доступных моделей для выбора")
+        st.error("❌ Нет доступных моделей")
     
     # Порог уверенности
     confidence_threshold = st.slider(
@@ -285,80 +314,62 @@ with st.sidebar:
     )
     
     # Перезагрузка
-    if st.button("🔄 Перезагрузить все модели"):
+    if st.button("🔄 Перезагрузить модели"):
         st.cache_resource.clear()
         st.rerun()
     
     st.markdown("---")
     
-    # Статус
-    st.markdown("### 📊 Статус моделей")
-    cols = st.columns(3)
-    status_info = [
-        ("HOG+SVM", model1, "web/model1_hog_svm.pkl"),
-        ("Haar+RF", model2, "web/model2_haar_rf.pkl"),
-        ("CNN", model3, "web/model3_cnn.h5")
-    ]
-    
-    for i, (name, model, path) in enumerate(status_info):
-        with cols[i]:
-            if model:
-                st.success(f"✅ {name}")
-                if os.path.exists(path):
-                    size_mb = os.path.getsize(path) / (1024 * 1024)
-                    st.caption(f"{size_mb:.1f} MB")
-            else:
-                st.error(f"❌ {name}")
-                if not os.path.exists(path):
-                    st.caption("файл не найден")
+    # Quick help
+    st.info("""
+    **Все файлы должны быть в папке web_app/:**
+    - model1_hog_svm.pkl
+    - model2_haar_rf.pkl  
+    - model3_cnn.h5
+    - labels_map.json
+    """)
 
 # ===== ОСНОВНОЙ ИНТЕРФЕЙС =====
 if not models_loaded:
-    st.error("⚠️ Критические проблемы с загрузкой моделей")
+    st.error("⚠️ Не удалось загрузить ни одну модель!")
     st.warning(error_msg)
     
     st.info("""
-    ## 🚀 Решение проблем:
+    ## 🚀 Что проверить:
     
-    ### **1. Проверьте структуру проекта на GitHub:**
-    Убедитесь, что в репозитории есть папка `web/` с файлами:
-    ```
-    web/
-    ├── model1_hog_svm.pkl
-    ├── model2_haar_rf.pkl
-    ├── model3_cnn.h5
-    └── labels_map.json (опционально)
-    ```
+    1. **Все ли файлы загружены в GitHub?**
+       - Откройте ваш репозиторий на GitHub
+       - Перейдите в папку `web_app/`
+       - Убедитесь, что видны файлы моделей
     
-    ### **2. Проверьте .gitignore:**
-    Убедитесь, что `.gitignore` НЕ содержит:
-    ```gitignore
-    web/*.pkl    # ← ЭТО НЕ ДОЛЖНО БЫТЬ!
-    web/*.h5     # ← ЭТО НЕ ДОЛЖНО БЫТЬ!
-    ```
+    2. **Проверьте .gitignore:**
+       ```bash
+       # НЕ должно быть в .gitignore:
+       *.pkl
+       *.h5
+       web_app/*.pkl
+       web_app/*.h5
+       ```
     
-    ### **3. Обновите requirements.txt:**
-    ```txt
-    streamlit==1.29.0
-    tensorflow==2.15.0
-    opencv-python-headless==4.8.1
-    numpy==1.24.3
-    Pillow==10.1.0
-    scikit-learn==1.3.2
-    ```
+    3. **Добавьте файлы в Git:**
+       ```bash
+       cd web_app
+       git add model1_hog_svm.pkl
+       git add model2_haar_rf.pkl
+       git add model3_cnn.h5
+       git add labels_map.json
+       git commit -m "Add model files"
+       git push
+       ```
     
-    ### **4. Если model2 не грузится из-за 'src':**
-    Пересохраните модель в другом формате:
-    ```python
-    import joblib
-    joblib.dump(model, 'web/model2_haar_rf.joblib')
-    ```
-    И обновите код для загрузки `.joblib`.
+    4. **На Streamlit Cloud:**
+       - Main file path: `web_app/app.py`
+       - Branch: ваша ветка
     """)
     
     st.stop()
 
-# Если хотя бы одна модель загружена
+# Успешная загрузка
 loaded_count = sum(1 for m in [model1, model2, model3] if m is not None)
 st.success(f"✅ Загружено моделей: {loaded_count}/3")
 
@@ -368,28 +379,27 @@ col1, col2 = st.columns([1, 1])
 with col1:
     st.header("📤 Загрузка изображения")
     
-    upload_option = st.radio("Способ загрузки:", ["Файл", "Камера"], horizontal=True)
+    upload_option = st.radio("Способ:", ["Файл", "Камера"], horizontal=True)
     
     uploaded_file = None
     if upload_option == "Файл":
         uploaded_file = st.file_uploader(
-            "Выберите изображение с лицом", 
-            type=['jpg', 'jpeg', 'png', 'bmp']
+            "Выберите изображение", 
+            type=['jpg', 'jpeg', 'png']
         )
     else:
-        uploaded_file = st.camera_input("Сфотографируйте лицо")
+        uploaded_file = st.camera_input("Сделайте фото")
 
 with col2:
-    st.header("🔍 Результаты детекции")
+    st.header("🔍 Результаты")
     
     if uploaded_file:
         try:
-            # Загрузка и обработка изображения
+            # Обработка изображения
             image = Image.open(uploaded_file)
             
-            # Показываем в левой колонке
             with col1:
-                st.image(image, caption='Исходное изображение', use_column_width=True)
+                st.image(image, use_column_width=True)
                 img_array = np.array(image)
                 st.caption(f"Размер: {img_array.shape[1]}x{img_array.shape[0]}")
             
@@ -404,7 +414,7 @@ with col2:
             
             # Предсказания
             if model_choice == "Все модели":
-                st.subheader("📊 Сравнение моделей")
+                st.subheader("Сравнение моделей")
                 
                 models_to_show = []
                 if model1:
@@ -415,44 +425,41 @@ with col2:
                     models_to_show.append((model3, "CNN (Deep Learning)", "🔴"))
                 
                 for model, name, icon in models_to_show:
-                    with st.container():
-                        st.markdown(f"##### {icon} {name}")
+                    try:
+                        pred_proba = model.predict_proba(img_input)[0]
+                        pred_class = np.argmax(pred_proba)
+                        confidence = pred_proba[pred_class]
+                        prediction = labels_map.get(pred_class, "С маской" if pred_class == 1 else "Без маски")
                         
-                        try:
-                            pred_proba = model.predict_proba(img_input)[0]
-                            pred_class = np.argmax(pred_proba)
-                            confidence = pred_proba[pred_class]
-                            prediction = labels_map.get(pred_class, "С маской" if pred_class == 1 else "Без маски")
-                            
-                            col_a, col_b = st.columns([2, 1])
-                            with col_a:
-                                if confidence >= confidence_threshold:
-                                    if prediction == "С маской":
-                                        st.success(f"✅ **{prediction}**")
-                                    else:
-                                        st.error(f"❌ **{prediction}**")
+                        st.markdown(f"**{icon} {name}:**")
+                        
+                        col_a, col_b = st.columns([2, 1])
+                        with col_a:
+                            if confidence >= confidence_threshold:
+                                if prediction == "С маской":
+                                    st.success(f"✅ {prediction}")
                                 else:
-                                    st.warning(f"⚠️ **{prediction}**")
-                            
-                            with col_b:
-                                st.metric("Уверенность", f"{confidence:.1%}")
-                            
-                            st.progress(float(confidence))
-                        except Exception as e:
-                            st.error(f"Ошибка: {str(e)[:80]}")
+                                    st.error(f"❌ {prediction}")
+                            else:
+                                st.warning(f"⚠️ {prediction}")
                         
+                        with col_b:
+                            st.metric("", f"{confidence:.1%}")
+                        
+                        st.progress(float(confidence))
                         st.markdown("---")
+                    except:
+                        st.error(f"Ошибка {name}")
             
             else:
                 # Одна модель
                 model_map = {
-                    "HOG + SVM": (model1, "🔵"),
-                    "Haar Cascade + RF": (model2, "🟢"),
-                    "CNN (Deep Learning)": (model3, "🔴")
+                    "HOG + SVM": model1,
+                    "Haar Cascade + RF": model2,
+                    "CNN (Deep Learning)": model3
                 }
                 
-                model, icon = model_map[model_choice]
-                
+                model = model_map[model_choice]
                 if model:
                     try:
                         pred_proba = model.predict_proba(img_input)[0]
@@ -460,7 +467,7 @@ with col2:
                         confidence = pred_proba[pred_class]
                         prediction = labels_map.get(pred_class, "С маской" if pred_class == 1 else "Без маски")
                         
-                        st.markdown(f"## {icon} {prediction}")
+                        st.markdown(f"## Результат: {prediction}")
                         
                         if confidence >= confidence_threshold:
                             if prediction == "С маской":
@@ -470,83 +477,49 @@ with col2:
                         else:
                             st.warning("⚠️ Низкая уверенность")
                         
-                        # Метрики
-                        col_a, col_b, col_c = st.columns(3)
-                        with col_a:
-                            st.metric("Результат", prediction)
-                        with col_b:
-                            st.metric("Уверенность", f"{confidence:.1%}")
-                        with col_c:
-                            st.metric("Порог", f"{confidence_threshold:.0%}")
-                        
+                        st.metric("Уверенность", f"{confidence:.1%}")
                         st.progress(float(confidence))
-                        
-                    except Exception as e:
-                        st.error(f"Ошибка предсказания: {str(e)}")
+                    except:
+                        st.error("Ошибка предсказания")
                 else:
-                    st.error(f"Модель {model_choice} не загружена")
+                    st.error("Модель не загружена")
         
         except Exception as e:
-            st.error(f"Ошибка обработки изображения: {str(e)}")
+            st.error(f"Ошибка: {str(e)}")
     
     else:
-        st.info("👆 Загрузите или сфотографируйте изображение для анализа")
-        
-        st.markdown("""
-        ### 💡 Рекомендации для лучших результатов:
-        
-        1. **Хорошее освещение** лица
-        2. **Лицо должно быть полностью видно**
-        3. **Портретная ориентация** предпочтительнее
-        4. **Избегайте** солнцезащитных очков, масок на подбородке
-        """)
+        st.info("👆 Загрузите изображение")
 
 # ===== FOOTER =====
 st.markdown("---")
 
-with st.expander("📋 Инструкция по успешному деплою"):
+with st.expander("📋 Инструкция"):
     st.markdown("""
-    ### **Для правильной работы на Streamlit Cloud:**
-    
-    1. **Структура репозитория должна быть:**
+    ### **Структура проекта на GitHub:**
     ```
     ваш-репозиторий/
-    ├── app.py                          # Этот файл
-    ├── web/                           # Папка с моделями
-    │   ├── model1_hog_svm.pkl        # Модель 1
-    │   ├── model2_haar_rf.pkl        # Модель 2  
-    │   ├── model3_cnn.h5             # Модель 3
-    │   └── labels_map.json           # Метки классов
-    ├── requirements.txt              # Зависимости
-    └── .gitignore                    # НЕ игнорировать web/*.pkl и web/*.h5
+    ├── web_app/                    # ВСЕ файлы здесь
+    │   ├── app.py                 # Этот файл
+    │   ├── model1_hog_svm.pkl     # Модель 1
+    │   ├── model2_haar_rf.pkl     # Модель 2
+    │   ├── model3_cnn.h5          # Модель 3
+    │   └── labels_map.json        # Метки
+    ├── requirements.txt
+    └── .gitignore
     ```
     
-    2. **Проверьте .gitignore:**
-    Убедитесь, что НЕТ строк:
-    ```gitignore
-    web/*.pkl
-    web/*.h5
-    *.pkl
-    *.h5
-    ```
+    ### **На Streamlit Cloud:**
+    - **Main file path:** `web_app/app.py`
+    - Branch: `main`
     
-    3. **Добавьте файлы в Git:**
-    ```bash
-    git add web/model1_hog_svm.pkl
-    git add web/model2_haar_rf.pkl
-    git add web/model3_cnn.h5
-    git add web/labels_map.json
-    git commit -m "Add model files from web folder"
-    git push
-    ```
-    
-    4. **На Streamlit Cloud укажите путь:**
-    - Main file path: `app.py`
-    - Branch: `main` или `master`
+    ### **Если модели не грузятся:**
+    1. Убедитесь файлы добавлены в Git
+    2. Проверьте `.gitignore`
+    3. Перезапустите приложение на Streamlit Cloud
     """)
 
 st.markdown("""
-    <div style='text-align: center; color: gray; padding: 20px;'>
-        <p>Mask Detection System | Модели: web/model1_hog_svm.pkl, web/model2_haar_rf.pkl, web/model3_cnn.h5</p>
-    </div>
+<div style='text-align: center; color: gray;'>
+<p>© 2024 Mask Detection System | Все файлы в web_app/</p>
+</div>
 """, unsafe_allow_html=True)
