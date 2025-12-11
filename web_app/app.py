@@ -416,7 +416,7 @@ with col1:
     
     if uploaded_file is not None:
         image = Image.open(uploaded_file)
-        st.image(image, caption='Загруженное изображение', width=None)
+        st.image(image, caption='Загруженное изображение', use_container_width=True)
         
         img_array = np.array(image)
         st.caption(f"Размер: {img_array.shape[1]}×{img_array.shape[0]} пикселей")
