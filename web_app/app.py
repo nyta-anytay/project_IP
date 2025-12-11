@@ -167,7 +167,10 @@ BASE_DIR = os.getcwd()
 TRAINED_MODELS_DIR = os.path.join(BASE_DIR, 'trained_models')
 MODEL1_PATH = os.path.join(TRAINED_MODELS_DIR, 'model1_hog_svm.pkl')
 MODEL2_PATH = os.path.join(TRAINED_MODELS_DIR, 'model2_haar_rf.pkl')
-MODEL3_PATH = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn.h5')
+# CNN модель - пробуем новый формат, потом старый
+MODEL3_PATH_NEW = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn_new.keras')
+MODEL3_PATH_OLD = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn.h5')
+MODEL3_PATH = MODEL3_PATH_NEW if os.path.exists(MODEL3_PATH_NEW) else MODEL3_PATH_OLD
 LABELS_MAP_PATH = os.path.join(TRAINED_MODELS_DIR, 'labels_map.json')
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
