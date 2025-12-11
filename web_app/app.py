@@ -13,6 +13,11 @@ import os
 import warnings
 warnings.filterwarnings('ignore')
 
+st.write("Текущая рабочая директория:", os.getcwd())
+st.write("Файлы в директории:", os.listdir('.'))
+st.write("Содержимое Trained_models:", os.listdir('../Trained_models'))
+
+
 # ===== ВАЖНО: ДЛЯ STREAMLIT CLOUD УБИРАЕМ ПУТИ ИЗ КОНФИГА =====
 # Вместо импорта из config, задаем пути напрямую
 MODEL1_PATH = 'web_app/model_hog_svm.pkl'  # или другое имя вашего первого .pkl файла
