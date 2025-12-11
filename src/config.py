@@ -7,7 +7,7 @@ import os
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(BASE_DIR, 'data')
 ASSETS_DIR = os.path.join(BASE_DIR, 'assets')
-MODELS_DIR = os.path.join(BASE_DIR, 'Trained_models')
+MODELS_DIR = os.path.join(BASE_DIR, 'trained_models')
 RESULTS_DIR = os.path.join(BASE_DIR, 'results')
 
 # Создание директорий если не существуют
