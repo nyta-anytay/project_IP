@@ -144,7 +144,18 @@ TRAINED_MODELS_DIR = os.path.join(BASE_DIR, 'trained_models')
 
 MODEL1_PATH = os.path.join(TRAINED_MODELS_DIR, 'model1_hog_svm.pkl')
 MODEL2_PATH = os.path.join(TRAINED_MODELS_DIR, 'model2_haar_rf.pkl')
-MODEL3_PATH = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn.h5')
+# Пробуем разные форматы модели
+MODEL3_PATH_SAVEDMODEL = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn_savedmodel')
+MODEL3_PATH_KERAS = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn.keras')
+MODEL3_PATH_H5 = os.path.join(TRAINED_MODELS_DIR, 'model3_cnn.h5')
+
+# Выбираем доступный формат
+if os.path.exists(MODEL3_PATH_SAVEDMODEL):
+    MODEL3_PATH = MODEL3_PATH_SAVEDMODEL
+elif os.path.exists(MODEL3_PATH_KERAS):
+    MODEL3_PATH = MODEL3_PATH_KERAS
+else:
+    MODEL3_PATH = MODEL3_PATH_H5
 LABELS_MAP_PATH = os.path.join(TRAINED_MODELS_DIR, 'labels_map.json')
 
 # ===== НАСТРОЙКА СТРАНИЦЫ =====
@@ -193,92 +204,40 @@ def load_models_from_trained_models():
             except Exception as e:
                 st.sidebar.error(f"❌ Model2: {str(e)[:100]}")
         
-        # ===== МОДЕЛЬ 3: CNN =====
+                # ===== МОДЕЛЬ 3: CNN =====
         if os.path.exists(MODEL3_PATH) and TF_AVAILABLE:
             try:
-                import h5py
+                st.sidebar.info("Загрузка CNN...")
                 
-                st.sidebar.info("Загрузка CNN модели...")
+                # Простая загрузка (SavedModel или .keras форматы более совместимы)
+                model3_keras = tf.keras.models.load_model(MODEL3_PATH, compile=False)
                 
-                # Вариант 1: Загрузка через weights_only
-                try:
-                    # Создаем архитектуру
-                    from tensorflow.keras.applications import MobileNetV2
-                    from tensorflow.keras import Sequential
-                    from tensorflow.keras.layers import (
-                        GlobalAveragePooling2D, Dense, 
-                        Dropout, Rescaling, Input,
-                        RandomFlip, RandomRotation, RandomZoom, RandomContrast
-                    )
-                    
-                    base_model = MobileNetV2(
-                        input_shape=(128, 128, 3),
-                        include_top=False,
-                        weights=None  # Без pretrained весов
-                    )
-                    base_model.trainable = False
-                    
-                    model3_keras = Sequential([
-                        Input(shape=(128, 128, 3)),
-                        Rescaling(1./255),
-                        RandomFlip("horizontal"),
-                        RandomRotation(0.1),
-                        RandomZoom(0.1),
-                        RandomContrast(0.1),
-                        base_model,
-                        GlobalAveragePooling2D(),
-                        Dropout(0.3),
-                        Dense(128, activation='relu'),
-                        Dropout(0.2),
-                        Dense(2, activation='softmax')
-                    ], name='MaskDetectionCNN')
-                    
-                    # Пытаемся загрузить веса
-                    try:
-                        model3_keras.load_weights(MODEL3_PATH)
-                        st.sidebar.success("✅ CNN с обученными весами")
-                        weights_loaded = True
-                    except Exception as e:
-                        st.sidebar.warning(f"⚠️ Не удалось загрузить веса: {str(e)[:80]}")
-                        # Загружаем pretrained веса ImageNet
-                        base_model_pretrained = MobileNetV2(
-                            input_shape=(128, 128, 3),
-                            include_top=False,
-                            weights='imagenet'
-                        )
-                        base_model.set_weights(base_model_pretrained.get_weights())
-                        st.sidebar.warning("⚠️ Используются веса ImageNet (неточно)")
-                        weights_loaded = False
-                    
-                except Exception as e1:
-                    st.sidebar.error(f"❌ Ошибка CNN: {str(e1)[:100]}")
-                    model3 = None
+                st.sidebar.success("✅ CNN загружена")
                 
-                if model3_keras:
-                    # Обертка
-                    class CNNWrapper:
-                        def __init__(self, model, weights_loaded):
-                            self.model = model
-                            self.weights_loaded = weights_loaded
+                # Обертка
+                class CNNWrapper:
+                    def __init__(self, model):
+                        self.model = model
+                    
+                    def predict_proba(self, X):
+                        if X.max() > 1.0:
+                            X = X / 255.0
                         
-                        def predict_proba(self, X):
-                            # CNN ожидает [0, 1]
-                            if X.max() > 1.0:
-                                X = X / 255.0
-                            
-                            predictions = self.model.predict(X, verbose=0)
-                            
-                            if predictions.shape[-1] == 1:
-                                prob = predictions.flatten()
-                                return np.column_stack([1 - prob, prob])
-                            
-                            return predictions
-                    
-                    model3 = CNNWrapper(model3_keras, weights_loaded)
+                        predictions = self.model.predict(X, verbose=0)
+                        
+                        if predictions.shape[-1] == 1:
+                            prob = predictions.flatten()
+                            return np.column_stack([1 - prob, prob])
+                        
+                        return predictions
+                
+                model3 = CNNWrapper(model3_keras)
                 
             except Exception as e:
-                st.sidebar.error(f"❌ Model3: {str(e)[:150]}")
+                st.sidebar.error(f"❌ CNN: {str(e)[:150]}")
                 model3 = None
+        else:
+            model3 = None
         
         any_loaded = model1 is not None or model2 is not None or model3 is not None
         
